@@ -2,3 +2,4 @@
 
 *.pper
 .Renviron
+.Rproj.user

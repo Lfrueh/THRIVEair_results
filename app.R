@@ -15,7 +15,7 @@ library(sf)
 
 library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
-mb_access_token(mapbox_token, install = TRUE)
+mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
 
 
 # Data Cleaning ----
