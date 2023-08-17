@@ -4,6 +4,7 @@ library(tidyverse)
 library(plotly)
 library(shinydashboard)
 library(sf)
+library(lubridate)
 
 #NOTES:
 # Eventually, we will need to add a 'month' variable so that the 'month average' selection is also contingent 
@@ -24,11 +25,13 @@ mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
 #and date average (within-date, across sites) for each pollutant
 
 #Let's average co-lo's for now, and convert to micrograms per meter cubed
-data <- read_csv("dat_june.csv") %>%
+data <- read_csv("dat.csv", ) %>%
     group_by(end_date, site_id) %>%
     mutate(across(benzene:btex, mean)) %>%
     distinct() %>%
     mutate(
+        begin_date = as.Date(begin_date, format = "%m/%d/%y"),
+        end_date = as.Date(end_date, format = "%m/%d/%y"),
         benzene = benzene*78.11/24.45,
         toluene = toluene*92.14/24.45,
         etbenz = etbenz*106.167/24.45,
@@ -37,8 +40,8 @@ data <- read_csv("dat_june.csv") %>%
     )
 
 #refinery
-refinery <- st_read("refinery/Refinery.shp") %>%
-    st_transform(., crs = 4326)
+# refinery <- st_read("refinery/Refinery.shp") %>%
+#     st_transform(., crs = 4326)
 
 
 voc <- c(
@@ -50,10 +53,6 @@ voc <- c(
 )
 
 
-default_pollutant <- "btex"
-default_date_filter <- "Month Average"
-
-
 # User Interface ----
 
 # Define UI for application that draws a map
@@ -61,8 +60,9 @@ ui <- fluidPage(
     titlePanel("VOC Concentrations at Different Sites"),
     sidebarLayout(
         sidebarPanel(
-            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = default_pollutant),
-            selectInput("date_filter", "Select Date:", choices = c("Month Average", unique(data$end_date)), selected = default_date_filter),
+            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
+            sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date)),
+            selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
             ),
         mainPanel(
             plotlyOutput("map"),
@@ -76,19 +76,32 @@ ui <- fluidPage(
 #  Server ----
 
 server <- function(input, output, session) {
+    
+    data_range <- reactive({
+        selected_range <- input$date_range
+        filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
+    })
+    
+    observe({
+        date_choices <- c("Average Across Date Range", format(unique(data_range()$end_date), "%m/%d/%y"))
+        updateSelectInput(session, "date_filter", choices = date_choices)
+    })
+    
+    
     # Filter data based on user input
     filtered_data <- reactive({
-        if (input$date_filter == "Month Average") {
+        if (input$date_filter == "Average Across Date Range") {
             # Calculate monthly averages for each pollutant
-            monthly_avg <- data %>%
+            avg <- data_range() %>%
                 group_by(site_id) %>%
                 mutate(across(benzene:btex, mean)) %>%
                 ungroup() %>%
                 select(-begin_date, -end_date, -week_num) %>%
                 distinct()
-            return(monthly_avg)
+            return(avg)
         } else {
-            return(data %>% filter(end_date == input$date_filter))
+            selected_date <- as.Date(input$date_filter, "%m/%d/%y")
+            return(filter(data_range(), end_date == selected_date))
         }
     })
     
