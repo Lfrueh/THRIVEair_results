@@ -5,7 +5,7 @@ account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9555195
-bundleId: 7558478
+bundleId: 7580598
 url: https://lisa-frueh.shinyapps.io/app_prototype/
 version: 1
 asMultiple: FALSE

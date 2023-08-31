@@ -6,13 +6,6 @@ library(shinydashboard)
 library(sf)
 library(lubridate)
 
-#NOTES:
-# Eventually, we will need to add a 'month' variable so that the 'month average' selection is also contingent 
-# on whether someone selected a particular month. So the decision structure would be like:
-# Select time frame: slider???
-# Select pollutant
-# Select specific date or a month average or a running average
-
 
 library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
@@ -54,29 +47,52 @@ voc <- c(
 
 
 # User Interface ----
-
-# Define UI for application that draws a map
 ui <- fluidPage(
     titlePanel("VOC Concentrations at Different Sites"),
-    sidebarLayout(
-        sidebarPanel(
-            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
-            sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date)),
-            selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
-            ),
-        mainPanel(
-            plotlyOutput("map"),
-            plotlyOutput("bar_chart")
-        )
+    
+    tabsetPanel(
+        tabPanel("Plots", fluid = TRUE,
+                 sidebarLayout(
+                     sidebarPanel(
+                         selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
+                         sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date),
+                                     timeFormat = "%m/%d/%y"),
+                         selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
+                         htmlOutput("info"),
+                         downloadButton("download", "Download Filtered Data as .csv")
+                     ),
+                     mainPanel(
+                         plotlyOutput("map"),
+                         plotlyOutput("bar_chart"),
+                         plotlyOutput("line_chart")
+                     )
+                 )
+                 ),
+        tabPanel("Data Table", fluid = TRUE,
+                 fillPage(dataTableOutput("table"))
+                 # sidebarLayout(
+                 #     sidebarPanel(
+                 #         # selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
+                 #         # sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date),
+                 #         #             timeFormat = "%m/%d/%y"),
+                 #         # selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
+                 #         # downloadButton("download", "Download Data as .csv")
+                 #     ),
+                 #     mainPanel(
+                 #         dataTableOutput("table")
+                 #     )
+                 # )
+                 )
     )
+
 )
 
-#tiny change
 
 #  Server ----
 
 server <- function(input, output, session) {
-    
+
+## Update date selections ----
     data_range <- reactive({
         selected_range <- input$date_range
         filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
@@ -86,9 +102,8 @@ server <- function(input, output, session) {
         date_choices <- c("Average Across Date Range", format(unique(data_range()$end_date), "%m/%d/%y"))
         updateSelectInput(session, "date_filter", choices = date_choices)
     })
-    
-    
-    # Filter data based on user input
+
+## Filter data ----
     filtered_data <- reactive({
         if (input$date_filter == "Average Across Date Range") {
             # Calculate monthly averages for each pollutant
@@ -105,7 +120,56 @@ server <- function(input, output, session) {
         }
     })
     
-    
+        
+## Render reactive text ----
+    observe({
+        # Clean up variable names
+        voc_name <- names(voc[voc == input$pollutant])
+        # Calculate the average concentration for the selected range
+        avg_selected_range <- round(mean(filtered_data()[[input$pollutant]]),2)
+        # Calculate the study-wide average concentration for the selected pollutant
+        avg_study_wide <- round(mean(data[[input$pollutant]]),2)
+        # Create a conditional expression comparing the selected pollutant to the study-wide average
+        comparison <- if (is.na(avg_selected_range) || is.na(avg_study_wide)) {
+            "N/A"
+        } else if (avg_selected_range > avg_study_wide) {
+            "<span style='color:red;font-weight:bold;'>higher than </span>"
+        } else if (avg_selected_range < avg_study_wide) {
+            "<span style='color:green;font-weight:bold;'>lower than </span>"
+        } else {
+            "<span style='color:black;'>the same as </span>"
+        }
+        # Create the reactive text
+        output$info<- renderUI({
+            if (input$date_filter == "Average Across Date Range") {
+                HTML(paste("The average concentration of", voc_name, 
+                           "for the selected date range was <strong>", round(avg_selected_range, 2), ("&mu;"), "g/m³",
+                           "</strong>.", "This is", comparison, "the study-wide average of", 
+                           "<strong>", round(avg_study_wide, 2), ("&mu;"), "g/m³","</strong>."))
+            } else {
+            HTML(paste("The average concentration of", voc_name, 
+                  "for the week ending on", input$date_filter, "was <strong>", round(avg_selected_range, 2), ("&mu;"), "g/m³",
+                  "</strong>.", "This is", comparison, "the study-wide average of", 
+                  "<strong>", round(avg_study_wide, 2), ("&mu;"), "g/m³","</strong>."))
+            }
+        })
+
+## Download button ----
+        output$download <- downloadHandler(
+            filename = function() {
+                # Get the minimum and maximum dates from the selected range
+                min_date <- format(input$date_range[1], "%Y-%m-%d")
+                max_date <- format(input$date_range[2], "%Y-%m-%d")
+                # Set the filename for the downloaded CSV
+                paste("filtered_data_", min_date, "_to_", max_date, ".csv", sep = "")
+            },
+            content = function(file) {
+                # Write the filtered data to a CSV file
+                write.csv(filtered_data(), file)
+            }
+        )
+        
+    })
     
 ## Render Map ----
     output$map <- renderPlotly({
@@ -163,18 +227,6 @@ server <- function(input, output, session) {
                    zoom = 12),
                    title = title_html
                )
-           # %>%
-           #  add_sf(
-           #      data = refinery,
-           #      type = "scattermapbox",
-           #      inherit = FALSE,
-           #      fillcolor = 'rgba(211,211,211,0.5)',
-           #      opacity = 0.2,
-           #      line = list(color = "grey", width = 0.2),
-           #      text = "Refinery",
-           #      hoverinfo = "text",
-           #      below = "markers")
-            
     })
     
 
@@ -188,7 +240,7 @@ server <- function(input, output, session) {
         cmax <- max(data[[input$pollutant]])
         cmin <- 0.9*min(data[[input$pollutant]])
         
-        if (input$date_filter == "Month Average") {
+        if (input$date_filter == "Average Across Date Range") {
             avg_data <- data %>%
                 group_by(site_id) %>%
                 mutate(across(benzene:btex, mean)) %>%
@@ -205,7 +257,7 @@ server <- function(input, output, session) {
                         cmin = cmin,
                         cmax = cmax), 
                     showlegend=FALSE, text = ~site, hoverinfo = 'text') %>%
-                layout(title = paste("Monthly Average:", "<br>",voc_name),
+                layout(title = paste("Comparing Average Concentrations of", "<br>",voc_name, "in the", "<br>","Selected Date Range Between Sites"),
                        xaxis = list(
                            title = "Site",
                            showticklabels = FALSE,
@@ -225,7 +277,7 @@ server <- function(input, output, session) {
                         cmin = cmin,
                         cmax = cmax), 
                     showlegend=FALSE, text = ~site, hoverinfo = 'text') %>%
-                layout(title = paste(voc_name, ":", "<br>", input$date_filter),
+                layout(title = paste("Comparing Concentrations of",voc_name, "on", "<br>", input$date_filter, "Between Sites"),
                        xaxis = list(
                            title = "Site",
                            showticklabels = FALSE,
@@ -235,6 +287,48 @@ server <- function(input, output, session) {
                        ) 
         }
     }) 
+    
+## Render Line Chart ----
+    output$line_chart <- renderPlotly({
+        # Clean up variable names
+        voc_name <- names(voc[voc == input$pollutant])
+        # Create a title for the line chart
+        line_title <- paste(voc_name, "Concentration Over Time")
+        # Get unique site list
+        sites <- unique(data_range()$site)
+        
+        p <- plot_ly()
+        
+        for (site_i in sites) {
+            site_data <- data_range() %>%
+                filter(site == site_i) %>% 
+                ungroup()
+            
+            p <- p %>%
+                add_trace(data = site_data,
+                          x = ~end_date,
+                          y = ~get(input$pollutant),
+                          type = "scatter",
+                          mode = "markers + lines",
+                          name = site_i,
+                          connectgaps = TRUE)
+        }
+        
+        p <- p %>% layout(
+            title = "Concentrations over time by site",
+            xaxis = list(title = "Date"),
+            yaxis = list(title = paste0(voc_name, " (", HTML("&mu;"), "g/m³", ")")),
+            showlegend = TRUE
+        )
+        
+        p
+
+    })
+    
+    output$table <- renderDataTable({
+        data
+    })
+    
 }
 
 
@@ -244,3 +338,9 @@ server <- function(input, output, session) {
 
 # Run the application 
 shinyApp(ui = ui, server = server)
+
+
+
+
+
+
