@@ -5,8 +5,9 @@ account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9555195
-bundleId: 7580598
+bundleId: 7636355
 url: https://lisa-frueh.shinyapps.io/app_prototype/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
+ignoredFiles: dat_june.csv|style.css

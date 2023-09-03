@@ -1,0 +1,5 @@
+/* Increase font size and make the text bold for sidebar links */
+.sidebar-menu a {
+  font-size: 18px; /* Adjust the desired font size */
+  font-weight: bold;
+}

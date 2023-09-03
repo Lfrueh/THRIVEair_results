@@ -5,11 +5,16 @@ library(plotly)
 library(shinydashboard)
 library(sf)
 library(lubridate)
+library(DT)
+
 
 
 library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
 mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
+
+
+#TEST OUT DOING THIS WITH SHINYDASHBOARD
 
 
 # Data Cleaning ----
@@ -18,7 +23,7 @@ mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
 #and date average (within-date, across sites) for each pollutant
 
 #Let's average co-lo's for now, and convert to micrograms per meter cubed
-data <- read_csv("dat.csv", ) %>%
+data <- read_csv("dat.csv") %>%
     group_by(end_date, site_id) %>%
     mutate(across(benzene:btex, mean)) %>%
     distinct() %>%
@@ -30,12 +35,8 @@ data <- read_csv("dat.csv", ) %>%
         etbenz = etbenz*106.167/24.45,
         xylenes = xylenes*106.16/24.45,
         btex = btex*594.91/24.45
-    )
-
-#refinery
-# refinery <- st_read("refinery/Refinery.shp") %>%
-#     st_transform(., crs = 4326)
-
+    ) %>%
+    ungroup()
 
 voc <- c(
     "Benzene" = "benzene",
@@ -45,47 +46,92 @@ voc <- c(
     "Total BTEX" = "btex"
 )
 
+other_vars <- c(
+    "Site" = "site",
+    "Sample begin date" = "begin_date",
+    "Sample end date" = "end_date",
+    "Latitude" = "lat",
+    "Longitude" = "long"
+)
+
+units <- c(
+    "µg/m³",
+    "ppbv"
+)
+
 
 # User Interface ----
-ui <- fluidPage(
-    titlePanel("VOC Concentrations at Different Sites"),
-    
-    tabsetPanel(
-        tabPanel("Plots", fluid = TRUE,
-                 sidebarLayout(
-                     sidebarPanel(
-                         selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
-                         sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date),
-                                     timeFormat = "%m/%d/%y"),
-                         selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
-                         htmlOutput("info"),
-                         downloadButton("download", "Download Filtered Data as .csv")
-                     ),
-                     mainPanel(
-                         plotlyOutput("map"),
-                         plotlyOutput("bar_chart"),
-                         plotlyOutput("line_chart")
-                     )
-                 )
-                 ),
-        tabPanel("Data Table", fluid = TRUE,
-                 fillPage(dataTableOutput("table"))
-                 # sidebarLayout(
-                 #     sidebarPanel(
-                 #         # selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
-                 #         # sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date),
-                 #         #             timeFormat = "%m/%d/%y"),
-                 #         # selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
-                 #         # downloadButton("download", "Download Data as .csv")
-                 #     ),
-                 #     mainPanel(
-                 #         dataTableOutput("table")
-                 #     )
-                 # )
-                 )
-    )
 
+# User Interface ----
+
+ui <- dashboardPage(
+    skin = "black",
+    dashboardHeader(title = "THRIVEair Results"),
+    dashboardSidebar(
+        sidebarMenu(menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+                    menuItem("Data Table", tabName = "data_table", icon = icon("table"))
+        )
+    ),
+    dashboardBody(
+        # Content for the "Dashboard" tab
+        tabItems(
+            tabItem(tabName = "dashboard",
+                    fluidRow(
+                        box(
+                            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
+                            sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date), timeFormat = "%m/%d/%y"),
+                            selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
+                            background = "navy", width = 6, title = "Select Data"
+                        ),
+                        box(
+                            uiOutput("info"),
+                            downloadButton("download", "Download Filtered Data as .csv"),
+                            width = 6, title = "Data Summary"
+                        )
+                    ),
+                    fluidRow(
+                        box(plotlyOutput("map"), width = 100)),
+                    fluidRow(
+                        box(plotlyOutput("bar_chart"), width = 100)),
+                    fluidRow(
+                        box(plotlyOutput("line_chart"), width = 100)
+                    )
+            ),
+            # Content for the "Data Table" tab
+             tabItem(tabName = "data_table",
+                     fluidRow(
+                         column(6,
+                                checkboxGroupInput("col_voc", "Select Pollutant(s):",
+                                                   voc, selected = voc),
+                                radioButtons("units", "Select Units",
+                                                   units, selected = units[1])),
+                         column(6, checkboxGroupInput("col_vars", "Select Other Variables:",
+                                                      other_vars, selected = other_vars),
+                                sliderInput("date_range2", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date), timeFormat = "%m/%d/%y"))
+                     ),
+                     fluidRow(
+                         box(
+                             dataTableOutput("table"), 
+                             style = "overflow-x: scroll",width = 100)
+                         )
+                     
+             )
+         ),
+        
+
+        
+        # Include your custom CSS directly here using tags$style
+        tags$style(
+            HTML('
+        /* Increase font size and make the text bold for sidebar links */
+        .sidebar-menu a {
+          font-size: 18px; /* Adjust the desired font size */
+          font-weight: bold;
+        }
+      '))
+    )
 )
+
 
 
 #  Server ----
@@ -119,6 +165,8 @@ server <- function(input, output, session) {
             return(filter(data_range(), end_date == selected_date))
         }
     })
+    
+
     
         
 ## Render reactive text ----
@@ -325,8 +373,57 @@ server <- function(input, output, session) {
 
     })
     
+    
+    table_data <- reactive({
+        
+        mws <- c(
+            "benzene" = 78.11,
+            "toluene" = 92.14,
+            "etbenz" = 106.167,
+            "xylenes" = 106.16,
+            "btex" = 594.91
+        )
+        
+        filtered <- data %>%
+            filter(end_date >= input$date_range2[1] & end_date <= input$date_range2[2]) %>%
+            select(all_of(c(input$col_vars, input$col_voc))) %>%
+            mutate(across(input$col_voc, round, 3))
+
+        if (input$units == "µg/m³"){
+            filtered <- filtered
+        } 
+        if (input$units == "ppbv") {
+            for (pollutant in names(mws)){
+                if (pollutant %in% colnames(filtered)){
+                    filtered <- filtered %>%
+                        mutate(!!pollutant := ifelse(!is.na(!!sym(pollutant)), 
+                                                     round(!!sym(pollutant) / mws[pollutant] * 24.45, 3), 
+                                                     !!sym(pollutant)))
+                }
+            }
+        }
+
+
+
+        
+        return(filtered)
+    })
+    
     output$table <- renderDataTable({
-        data
+        datatable(table_data(),
+                  extensions = 'Buttons', 
+                  options = list(scrollX=TRUE, 
+                                 paging = TRUE, 
+                                 searching = TRUE,
+                                # fixedColumns = TRUE, 
+                                # autoWidth = TRUE,
+                                 ordering = TRUE, 
+                                dom = 'Bfrtip',
+                                 buttons = list(list(
+                                     extend = 'collection',
+                                     buttons = c('csv', 'excel', 'pdf'),
+                                     text = 'Download'
+                                 ))))
     })
     
 }
