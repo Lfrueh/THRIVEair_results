@@ -1,5 +1,90 @@
-/* Increase font size and make the text bold for sidebar links */
+
+/*Get custom font*/
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans&display=swap');
+
+.irs--shiny .irs-bar, .irs--shiny .irs-single {
+  border: #3ace88;
+  background: #3ace88;
+}
+
+.main-header .navbar{
+  height: 50px;
+}
+/* Style the title bar */
+.main-header .logo {
+  color:#2E3440 !important;
+ font-family: 'Open Sans', sans-serif;
+ font-weight: bold;
+}
+
+.main-header .logo img{
+  display: block;
+  float: right;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+body, h2, p, div {
+  font-family: 'Open Sans', sans-serif;
+}
+
 .sidebar-menu a {
   font-size: 18px; /* Adjust the desired font size */
   font-weight: bold;
+}
+
+p, div{
+  color: #2E3440;
+}
+
+/* Style the tooltip */
+.sidebar-toggle[data-tooltip]:hover::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  background-color: #000;
+  color: #fff;
+  padding: 5px;
+  border-radius: 3px;
+  left: -120px; /* Adjust the left position as needed */
+  top: 100%; /* Position it below the button */
+  z-index: 999;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  font-size: 12px !important; /* Adjust the font size as needed */
+  font-family: Arial, sans-serif !important; /* Specify the desired font family */
+  font-weight: normal !important; /* Ensure normal font weight */
+}
+
+/* Show the tooltip on hover */
+.sidebar-toggle[data-tooltip]:hover::before {
+  opacity: 1;
+}
+/* Customize the toggle sidebar button with a black left caret icon */
+.sidebar-toggle:before {
+  content: '\f104'; /* Unicode character for a black left caret icon */
+  color: #2E3440; /* Set the icon color to black */
+  font-family: 'Open Sans'; /* Use FontAwesome for the icon */
+  font-size: 16px; /* Adjust the icon size as needed */
+}
+
+/* Style for the active (collapsed) sidebar button */
+.sidebar-collapse .sidebar-toggle:before {
+  content: '\f105'; /* Unicode character for a different black left caret icon */
+}
+
+/* Override default colors for active (collapsed) button */
+.sidebar-collapse .sidebar-toggle {
+  background-color: #2E3440; /* Background color for active (collapsed) button */
+  border: none; /* Remove border for active (collapsed) button */
+}
+
+/* Optional: Adjust the button size and positioning */
+.sidebar-toggle {
+  padding: 10px; /* Adjust padding as needed */
+  position: relative;
+  left: 0;
+  right: 0;
+  top: 0;
 }

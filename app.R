@@ -6,6 +6,9 @@ library(shinydashboard)
 library(sf)
 library(lubridate)
 library(DT)
+library(shinyWidgets)
+library(fresh)
+
 
 
 
@@ -13,8 +16,21 @@ library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
 mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
 
+my_theme = create_theme(
+  adminlte_color(
+    light_blue = "#FFF"
+  ),
+  adminlte_sidebar(
+    dark_bg = "#D8DEE9",
+    dark_hover_bg = "#3ace88",
+    dark_color = "#2E3440"
+  ),
+  adminlte_global(
+    info_box_bg = "#D8DEE9"
+  )
+)
 
-#TEST OUT DOING THIS WITH SHINYDASHBOARD
+
 
 
 # Data Cleaning ----
@@ -59,42 +75,77 @@ units <- c(
     "ppbv"
 )
 
+end_dates <- unique(data$end_date)
+
 
 # User Interface ----
 
 # User Interface ----
 
 ui <- dashboardPage(
-    skin = "black",
-    dashboardHeader(title = "THRIVEair Results"),
+    dashboardHeader(
+      title = "THRIVEair Results",
+      tags$li(a(href = "https://thriveairphilly.com/", img(src = "logo.png", height = "30px")), class = "dropdown")
+                    ),
     dashboardSidebar(
         sidebarMenu(menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
-                    menuItem("Data Table", tabName = "data_table", icon = icon("table"))
-        )
+                    menuItem("Data Table", tabName = "data_table", icon = icon("table")),
+                    menuItem("Information", tabName = "docs", icon = icon("circle-info"))
+                    
+        ),
+        tags$script(HTML('
+    $(document).ready(function() {
+      // Set a static tooltip text
+      $(".sidebar-toggle").attr("data-tooltip", "Toggle Navigation Pane");
+    });
+  '))
     ),
     dashboardBody(
+      use_theme(my_theme),
+      includeCSS("style.css"),
         # Content for the "Dashboard" tab
         tabItems(
             tabItem(tabName = "dashboard",
                     fluidRow(
+                      box(
+                        title = "Instructions",
+                  #      status = "info",  
+                        solidHeader = TRUE,
+                        collapsible = TRUE,
+                        width = 12,
+                        uiOutput("instruction_text")  
+                      )
+                    ),
+                    
+                    fluidRow(
                         box(
                             selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
-                            sliderInput("date_range", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date), timeFormat = "%m/%d/%y"),
+                            
+                            sliderTextInput(
+                                inputId = "date_range", label = "Select Monitoring End Dates:", 
+                                choices = end_dates, selected = range(end_dates), 
+                                grid = TRUE
+                            ),
+
                             selectInput("date_filter", "Select Date:", choices = NULL, selected = "Average Across Date Range"),
-                            background = "navy", width = 6, title = "Select Data"
+                            width = 6, title = "Select Data",
+                            collapsible = TRUE,
+                            solidHeader = TRUE,
                         ),
                         box(
                             uiOutput("info"),
                             downloadButton("download", "Download Filtered Data as .csv"),
-                            width = 6, title = "Data Summary"
+                            width = 6, title = "Data Summary",
+                            collapsible = TRUE,
+                            solidHeader = TRUE,
                         )
                     ),
                     fluidRow(
-                        box(plotlyOutput("map"), width = 100)),
+                        box(plotlyOutput("map"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Map")),
                     fluidRow(
-                        box(plotlyOutput("bar_chart"), width = 100)),
+                        box(plotlyOutput("bar_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Bar Chart")),
                     fluidRow(
-                        box(plotlyOutput("line_chart"), width = 100)
+                        box(plotlyOutput("line_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Concentrations Over Time")
                     )
             ),
             # Content for the "Data Table" tab
@@ -107,29 +158,31 @@ ui <- dashboardPage(
                                                    units, selected = units[1])),
                          column(6, checkboxGroupInput("col_vars", "Select Other Variables:",
                                                       other_vars, selected = other_vars),
-                                sliderInput("date_range2", "Select Date Range:", value = c(min(data$end_date), max(data$end_date)), min = min(data$end_date), max = max(data$end_date), timeFormat = "%m/%d/%y"))
-                     ),
+                                sliderTextInput(
+                                    inputId = "date_range2", label = "Select Monitoring End Dates:", 
+                                    choices = end_dates, selected = range(end_dates), 
+                                    grid = TRUE
+                                )
+                             
+                     )),
                      fluidRow(
                          box(
                              dataTableOutput("table"), 
                              style = "overflow-x: scroll",width = 100)
                          )
                      
-             )
-         ),
-        
-
-        
-        # Include your custom CSS directly here using tags$style
-        tags$style(
-            HTML('
-        /* Increase font size and make the text bold for sidebar links */
-        .sidebar-menu a {
-          font-size: 18px; /* Adjust the desired font size */
-          font-weight: bold;
-        }
-      '))
-    )
+             ),
+            tabItem(tabName = "docs",
+                    fluidRow(
+                      box(
+                        uiOutput("documentation"),
+                        width = 12
+                      )
+                    )
+              
+            )
+         )
+)
 )
 
 
@@ -137,10 +190,53 @@ ui <- dashboardPage(
 #  Server ----
 
 server <- function(input, output, session) {
+    
+    
+    output$instruction_text <- renderUI({
+      HTML("<span style='color:black;'> 
+            Select data using the menu options below. 
+            To zoom, select, or download a photo of a plot or graph, hover over the plot until the controls appear on the right-hand side.
+            Hover over each button to learn its function.
+            To collapse these instructions or any section on this page, click the '--' symbol in the upper right-hand corner of the content box.
+            <br><br>
+            To see and download a data table, and for more information, click on the 'Data Table' or 'Information' tabs in the left sidebar.
+           </span>")
+    })
+    
+    
+    output$documentation <- renderUI({
+      HTML(paste("<span> \
+      <h3> About THRIVEair </h3>
+          THRIVEair is a community-based air monitoring project in South and Southwest Philadelphia.
+          Designed as a partnership between <a href='https://www.phillythrive.org/'> Philly Thrive </a>
+          and researchers at the <a href= 'https://drexel.edu/dornsife/'> Drexel Dornsife School of Public Health</a>, 
+          data will be collected from summer 2023 - summer 2024.
+          <br> <br>
+         <strong> For more information on the study, visit our website at: <a href = 'https://thriveairphilly.com/'>THRIVEairPhilly.com </a> </strong>
+      <br> <br>
+      <h3> Interpreting These Data </h3>
+           Volatile organic compounds (VOCs) were monitored in one-week sessions, 
+           with begin dates representing the date of monitor deployment and end dates representing the date of data retrieval.
+           Concentrations shown in these results are one week averages over the sampling period.
+           <br><br>
+           For example, a benzene concentration of 1 µg/m³ on 6/14/23 is interpreted as 
+           the <strong>one-week average concentration</strong> at that site for the week beginning on 6/7 and ending on 6/14.
+           <br> <br>
+      <h3> Contact Us </h3>
+           
+           <strong>E-mail:</strong> THRIVEair@gmail.com
+           <br>
+           <strong>Other:</strong> <a href= 'https://thriveairphilly.com/contact/'> Contact Form </a>
+
+           
+           
+           </span>"))
+    })
+    
 
 ## Update date selections ----
     data_range <- reactive({
-        selected_range <- input$date_range
+        selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
         filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
     })
     
@@ -205,11 +301,11 @@ server <- function(input, output, session) {
 ## Download button ----
         output$download <- downloadHandler(
             filename = function() {
-                # Get the minimum and maximum dates from the selected range
-                min_date <- format(input$date_range[1], "%Y-%m-%d")
-                max_date <- format(input$date_range[2], "%Y-%m-%d")
+              selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
+                min_date <- selected_range[1]
+                max_date <- selected_range[2]
                 # Set the filename for the downloaded CSV
-                paste("filtered_data_", min_date, "_to_", max_date, ".csv", sep = "")
+                paste("THRIVEair_results_", min_date, "_to_", max_date, ".csv", sep = "")
             },
             content = function(file) {
                 # Write the filtered data to a CSV file
@@ -227,6 +323,7 @@ server <- function(input, output, session) {
         # Create a custom title for the map
         title_html <- paste(voc_name, ": ", input$date_filter)
         
+        
         #standardize color scale max across time filters
         cmax <- max(data[[input$pollutant]])
         cmin <- 0.9*min(data[[input$pollutant]])
@@ -243,6 +340,7 @@ server <- function(input, output, session) {
                        opacity = 1.0
                    ),
                    hoverinfo = "none"
+
                ) %>%
             add_trace(
                 type = "scattermapbox",
@@ -264,6 +362,7 @@ server <- function(input, output, session) {
                 text = ~paste(site),
                 hoverinfo = "text",
                 showlegend = FALSE
+               
             ) %>%
                layout(
                    mapbox = list(
@@ -273,8 +372,8 @@ server <- function(input, output, session) {
                    style = "streets",
                    center = list(lat = mean(data$lat), lon = mean(data$long)),
                    zoom = 12),
-                   title = title_html
-               )
+                   title = title_html) %>%
+               config(scrollZoom = FALSE)
     })
     
 
@@ -312,7 +411,8 @@ server <- function(input, output, session) {
                            categoryorder = "total ascending"),
                        yaxis = list(
                            title = paste0(voc_name, " (", HTML("&mu;"), "g/m³",")"))
-                )
+                ) %>%
+              config(scrollZoom = FALSE)
         } else {
             chart_data <- filtered_data()
             
@@ -332,11 +432,13 @@ server <- function(input, output, session) {
                            categoryorder = "total ascending"),
                        yaxis = list(
                            title = paste0(voc_name, " (", HTML("&mu;"), "g/m³",")"))
-                       ) 
+                       ) %>%
+              config(scrollZoom = FALSE)
         }
     }) 
     
 ## Render Line Chart ----
+
     output$line_chart <- renderPlotly({
         # Clean up variable names
         voc_name <- names(voc[voc == input$pollutant])
@@ -345,31 +447,25 @@ server <- function(input, output, session) {
         # Get unique site list
         sites <- unique(data_range()$site)
         
-        p <- plot_ly()
-        
-        for (site_i in sites) {
-            site_data <- data_range() %>%
-                filter(site == site_i) %>% 
-                ungroup()
-            
-            p <- p %>%
-                add_trace(data = site_data,
-                          x = ~end_date,
-                          y = ~get(input$pollutant),
-                          type = "scatter",
-                          mode = "markers + lines",
-                          name = site_i,
-                          connectgaps = TRUE)
-        }
-        
-        p <- p %>% layout(
+        data_range() %>% 
+            ungroup() %>%
+            plot_ly() %>%
+            add_trace(
+                split = ~site,
+                x = ~end_date,
+                y = ~get(input$pollutant),
+                type = "scatter",
+                mode = "markers + lines",
+                name = ~site,
+                connectgaps = TRUE,
+                text = paste0(data_range()$site,", ",data_range()$end_date), hoverinfo = 'text')%>% 
+            layout(
             title = "Concentrations over time by site",
             xaxis = list(title = "Date"),
             yaxis = list(title = paste0(voc_name, " (", HTML("&mu;"), "g/m³", ")")),
             showlegend = TRUE
-        )
-        
-        p
+        ) %>%
+          config(scrollZoom = FALSE)
 
     })
     
@@ -384,8 +480,9 @@ server <- function(input, output, session) {
             "btex" = 594.91
         )
         
-        filtered <- data %>%
-            filter(end_date >= input$date_range2[1] & end_date <= input$date_range2[2]) %>%
+
+        selected_range <- as.Date(input$date_range2, format = "%Y-%m-%d")
+        filtered <- filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
             select(all_of(c(input$col_vars, input$col_voc))) %>%
             mutate(across(input$col_voc, round, 3))
 
