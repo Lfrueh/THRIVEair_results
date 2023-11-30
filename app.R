@@ -8,9 +8,10 @@ library(lubridate)
 library(DT)
 library(shinyWidgets)
 library(fresh)
+library(readxl)
 
-
-
+#To do: 
+#make downloadable codebook
 
 library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
@@ -38,33 +39,44 @@ my_theme = create_theme(
 # Group by site and calculate site averages (within-site, across month) 
 #and date average (within-date, across sites) for each pollutant
 
-#Let's average co-lo's for now, and convert to micrograms per meter cubed
 data <- read_csv("dat.csv") %>%
-    group_by(end_date, site_id) %>%
-    mutate(across(benzene:btex, mean)) %>%
-    distinct() %>%
+  filter(site_type == "stationary") %>%
     mutate(
-        begin_date = as.Date(begin_date, format = "%m/%d/%y"),
-        end_date = as.Date(end_date, format = "%m/%d/%y"),
-        benzene = benzene*78.11/24.45,
-        toluene = toluene*92.14/24.45,
-        etbenz = etbenz*106.167/24.45,
-        xylenes = xylenes*106.16/24.45,
-        btex = btex*594.91/24.45
+        start_date = as.Date(start_date, format = "%m/%d/%y"),
+        end_date = as.Date(end_date, format = "%m/%d/%y")
     ) %>%
-    ungroup()
+  ungroup() %>%
+  select(-...1) %>%
+  select(-ends_with("flag"), -site_type) %>%
+  arrange(., end_date) 
+  
 
-voc <- c(
-    "Benzene" = "benzene",
-    "Toluene" = "toluene",
-    "Ethylbenzene" = "etbenz",
-    "Xylenes" = "xylenes",
-    "Total BTEX" = "btex"
-)
+
+
+
+codebook <- read_excel("codebook.xlsx")
+voc <- setNames(codebook$variable_name, codebook$voc_name)
+mws <- setNames(codebook$mw, codebook$variable_name)
+
+
+#Convert to microgram per meter cubed
+for (pollutant in names(mws)){
+  if (pollutant != "btex") {
+    data <- data %>%
+      mutate(!!pollutant := ifelse(!is.na(!!sym(pollutant)), 
+                                   round(!!sym(pollutant) * mws[pollutant] / 24.45, 3), 
+                                   !!sym(pollutant)))
+  }
+}
+
+data <- data %>%
+  mutate(btex = rowSums(select(data, benzene:xylenes), na.rm = TRUE)) %>%
+  mutate(btex = round(btex, 3)) %>%
+  relocate(btex, .after = "xylenes")
 
 other_vars <- c(
     "Site" = "site",
-    "Sample begin date" = "begin_date",
+    "Sample begin date" = "start_date",
     "Sample end date" = "end_date",
     "Latitude" = "lat",
     "Longitude" = "long"
@@ -89,9 +101,9 @@ ui <- dashboardPage(
                     ),
     dashboardSidebar(
         sidebarMenu(menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+                    menuItem("Compare", tabName = "compare", icon=icon("code-compare")),
                     menuItem("Data Table", tabName = "data_table", icon = icon("table")),
                     menuItem("Information", tabName = "docs", icon = icon("circle-info"))
-                    
         ),
         tags$script(HTML('
     $(document).ready(function() {
@@ -141,11 +153,11 @@ ui <- dashboardPage(
                         )
                     ),
                     fluidRow(
-                        box(plotlyOutput("map"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Map")),
+                        box(plotlyOutput("map"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Comparing Concentrations Across Sites")),
                     fluidRow(
-                        box(plotlyOutput("bar_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Bar Chart")),
+                        box(plotlyOutput("bar_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Comparing Concentrations Across Sites")),
                     fluidRow(
-                        box(plotlyOutput("line_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Concentrations Over Time")
+                        box(plotlyOutput("line_chart"), width = 100, collapsible = TRUE, solidHeader = TRUE, title = "Comparing Concentrations Over Time")
                     )
             ),
             # Content for the "Data Table" tab
@@ -153,16 +165,21 @@ ui <- dashboardPage(
                      fluidRow(
                          column(6,
                                 checkboxGroupInput("col_voc", "Select Pollutant(s):",
-                                                   voc, selected = voc),
-                                radioButtons("units", "Select Units",
-                                                   units, selected = units[1])),
+                                                   voc, selected = voc)),
                          column(6, checkboxGroupInput("col_vars", "Select Other Variables:",
                                                       other_vars, selected = other_vars),
                                 sliderTextInput(
                                     inputId = "date_range2", label = "Select Monitoring End Dates:", 
                                     choices = end_dates, selected = range(end_dates), 
                                     grid = TRUE
-                                )
+                                ),
+                                radioButtons("units", "Select Units",
+                                             units, selected = units[1]),
+                                radioButtons("flag", "Show Measurement Flags?",
+                                             c("Yes", "No"), selected = "Yes"),
+                                downloadButton("codebook","Download Codebook"),
+                                HTML("<br><br>"),
+                                box(uiOutput("table_info"), width = 100)
                              
                      )),
                      fluidRow(
@@ -172,7 +189,10 @@ ui <- dashboardPage(
                          )
                      
              ),
+            # Content for the Details tab
             tabItem(tabName = "docs",
+                    fluidRow(img(src='combo_logo.png', height="50%", width = "50%", align = 'center'), width = 12
+                    ),
                     fluidRow(
                       box(
                         uiOutput("documentation"),
@@ -180,16 +200,48 @@ ui <- dashboardPage(
                       )
                     )
               
-            )
+            ),
+            # Content for the Comparison Tab
+            tabItem(tabName = "compare",
+                    fluidRow(
+                      box(
+                        selectInput("comp1", "Select Pollutant 1:", choices = voc, selected = "benzene"),
+                        selectInput("comp2", "Select Pollutant 2:", choices = voc, selected = "toluene"),
+                        selectInput("comp3", "Select Pollutant 3:", choices = voc, selected = "etbenz"),
+                        selectInput("comp4", "Select Pollutant 4:", choices = voc, selected = "xylenes"),
+                        width = 6, title = "Select Pollutants for Comparison",
+                        collapsible = TRUE,
+                        solidHeader = TRUE,
+                      ),
+                      box(
+                        sliderTextInput(
+                          inputId = "date_range_comp", label = "Select Monitoring End Dates:", 
+                          choices = end_dates, selected = range(end_dates), 
+                          grid = TRUE
+                        ),
+                        width = 6, title = "Select Dates",
+                        collapsible = TRUE,
+                        solidHeader = TRUE,
+                      )
+                    ),
+                    fluidRow(
+                      box(plotlyOutput("compchart"), width = 100, height = 820),
+                    
+                    ))
          )
+    )
 )
-)
+
+
 
 
 
 #  Server ----
 
 server <- function(input, output, session) {
+  
+  pal <- list(c(0, "lightpink"), c(1, "darkblue"))
+#  pal <- "Viridis"
     
     
     output$instruction_text <- renderUI({
@@ -209,8 +261,9 @@ server <- function(input, output, session) {
       <h3> About THRIVEair </h3>
           THRIVEair is a community-based air monitoring project in South and Southwest Philadelphia.
           Designed as a partnership between <a href='https://www.phillythrive.org/'> Philly Thrive </a>
-          and researchers at the <a href= 'https://drexel.edu/dornsife/'> Drexel Dornsife School of Public Health</a>, 
-          data will be collected from summer 2023 - summer 2024.
+          and researchers at the <a href= 'https://drexel.edu/dornsife/'> Drexel Dornsife School of Public Health</a> and
+          <a href = 'https://www.lcsc.edu/'>Lewis Clark State college</a>.
+          Data will be collected from summer 2023 - summer 2024.
           <br> <br>
          <strong> For more information on the study, visit our website at: <a href = 'https://thriveairphilly.com/'>THRIVEairPhilly.com </a> </strong>
       <br> <br>
@@ -222,6 +275,7 @@ server <- function(input, output, session) {
            For example, a benzene concentration of 1 µg/m³ on 6/14/23 is interpreted as 
            the <strong>one-week average concentration</strong> at that site for the week beginning on 6/7 and ending on 6/14.
            <br> <br>
+           For more details on sampling methodology and interpretation, download the codebook available in the Data Table tab.<br><br>
       <h3> Contact Us </h3>
            
            <strong>E-mail:</strong> THRIVEair@gmail.com
@@ -233,13 +287,30 @@ server <- function(input, output, session) {
            </span>"))
     })
     
-
-## Update date selections ----
+    output$table_info <- renderUI({
+      HTML(paste("<span> \
+      <h3> Using These Data </h3>
+      <p>
+         Samples were analyzed by Dr. Nancy Johnston at <a href = 'https://www.lcsc.edu/'>Lewis Clark State college</a>.<br><br>
+         At this stage, data has been quality assured to level 1.<br>
+         <em>Therefore, data may change and are not finalized for archiving.</em><br><br>
+         <strong>To re-use or publish these data, please <u>contact us to request permission:</u><br><br>
+         THRIVEair@gmail.com</p></strong>
+           </span>"))
+    })
+    
+## Select Data Based on Date Range  ----
     data_range <- reactive({
         selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
         filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
     })
     
+    data_range_comp <- reactive({
+      selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
+      filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
+    })
+    
+## Update date selections ----    
     observe({
         date_choices <- c("Average Across Date Range", format(unique(data_range()$end_date), "%m/%d/%y"))
         updateSelectInput(session, "date_filter", choices = date_choices)
@@ -250,10 +321,10 @@ server <- function(input, output, session) {
         if (input$date_filter == "Average Across Date Range") {
             # Calculate monthly averages for each pollutant
             avg <- data_range() %>%
-                group_by(site_id) %>%
-                mutate(across(benzene:btex, mean)) %>%
+                group_by(site) %>%
+                mutate(across(benzene:dodecane, mean, na.rm = TRUE)) %>%
                 ungroup() %>%
-                select(-begin_date, -end_date, -week_num) %>%
+                select(-start_date, -end_date) %>%
                 distinct()
             return(avg)
         } else {
@@ -319,9 +390,16 @@ server <- function(input, output, session) {
     output$map <- renderPlotly({
         # Clean up variable names
         voc_name <- names(voc[voc == input$pollutant])
+        selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
         
         # Create a custom title for the map
-        title_html <- paste(voc_name, ": ", input$date_filter)
+        title_html <- if (input$date_filter == "Average Across Date Range") {
+          paste0("Average ", voc_name,": ",selected_range[1]," to ",selected_range[2])
+        } else {
+          paste0(voc_name,": ",input$date_filter)
+        }
+          
+          paste0(voc_name, ": ", input$date_filter)
         
         
         #standardize color scale max across time filters
@@ -335,7 +413,7 @@ server <- function(input, output, session) {
                    lat = ~lat,
                    lon = ~long,
                    marker = list(
-                       size = 21,
+                       size = 22,
                        color = "black",
                        opacity = 1.0
                    ),
@@ -356,10 +434,10 @@ server <- function(input, output, session) {
                     colorbar = list(
                         title = paste0(voc_name, "<br>"," (", HTML("&mu;"), "g/m³",")")
                     ),
-                    colorscale = "Viridis",
-                    reversescale = TRUE
+                    colorscale = pal,
+                    reversescale = FALSE
                 ),
-                text = ~paste(site),
+                text = paste0(filtered_data()$site,"<br><b>",voc_name,":</b> ",round(filtered_data()[[input$pollutant]],2),HTML(" &mu;"), "g/m³"),
                 hoverinfo = "text",
                 showlegend = FALSE
                
@@ -379,40 +457,50 @@ server <- function(input, output, session) {
 
     
 ## Render Bar Chart ----
+    
     output$bar_chart <- renderPlotly({
         #clean up variable names
         voc_name <- names(voc[voc == input$pollutant])
+        selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
+        
         
         #standardize color scale max across time filters
         cmax <- max(data[[input$pollutant]])
         cmin <- 0.9*min(data[[input$pollutant]])
         
         if (input$date_filter == "Average Across Date Range") {
-            avg_data <- data %>%
-                group_by(site_id) %>%
-                mutate(across(benzene:btex, mean)) %>%
+            avg_data <- data_range() %>%
+                group_by(site) %>%
+                mutate(across(benzene:dodecane, mean, na.rm=TRUE)) %>%
                 ungroup() %>%
-                select(-begin_date, -end_date, -week_num) %>%
+                select(-start_date, -end_date) %>%
                 distinct()
 
             plot_ly(data = avg_data, x = ~site, y = avg_data[[input$pollutant]], 
                     type = "bar", 
                     marker = list(
                         color = ~avg_data[[input$pollutant]], 
-                        colorscale = "Viridis",
-                        reversescale = TRUE,
+                        colorscale = pal,
+                        reversescale = FALSE,
                         cmin = cmin,
                         cmax = cmax), 
-                    showlegend=FALSE, text = ~site, hoverinfo = 'text') %>%
-                layout(title = paste("Comparing Average Concentrations of", "<br>",voc_name, "in the", "<br>","Selected Date Range Between Sites"),
+                    showlegend=FALSE, 
+                    text = ~avg_data$site,
+                   hovertemplate = paste0(avg_data$site,"<br><b>",voc_name,":</b> ",round(avg_data[[input$pollutant]],2),HTML(" &mu;"), "g/m³","<extra></extra>")
+                    ) %>%
+                layout(title = paste0("Average ",voc_name, ": ", "<br>",selected_range[1]," to ", selected_range[2]),
                        xaxis = list(
+                         tickfont = list(size = 15),
+                         titlefont = list(size = 18),
                            title = "Site",
                            showticklabels = FALSE,
                            categoryorder = "total ascending"),
                        yaxis = list(
+                         tickfont = list(size = 15),
+                         titlefont = list(size = 18),
                            title = paste0(voc_name, " (", HTML("&mu;"), "g/m³",")"))
                 ) %>%
-              config(scrollZoom = FALSE)
+              config(scrollZoom = FALSE, displaylogo = FALSE) 
         } else {
             chart_data <- filtered_data()
             
@@ -420,20 +508,28 @@ server <- function(input, output, session) {
                     type = "bar", 
                     marker = list(
                         color = ~chart_data[[input$pollutant]], 
-                        colorscale = "Viridis",
-                        reversescale = TRUE,
+                        colorscale = pal,
+                        reversescale = FALSE,
                         cmin = cmin,
-                        cmax = cmax), 
-                    showlegend=FALSE, text = ~site, hoverinfo = 'text') %>%
-                layout(title = paste("Comparing Concentrations of",voc_name, "on", "<br>", input$date_filter, "Between Sites"),
+                        cmax = cmax),
+                    showlegend=FALSE, 
+                    text = ~site,
+                    textposition = 'auto',
+                    hovertemplate = paste0(chart_data$site,"<br><b>",voc_name,":</b> ",round(chart_data[[input$pollutant]],2),HTML(" &mu;"), "g/m³","<extra></extra>")
+                    ) %>%
+                layout(title = paste(voc_name, ": ", "<br>", input$date_filter),
                        xaxis = list(
+                         tickfont = list(size = 15),
+                         titlefont = list(size = 15),
                            title = "Site",
                            showticklabels = FALSE,
                            categoryorder = "total ascending"),
                        yaxis = list(
+                         tickfont = list(size = 15),
+                         titlefont = list(size = 20),
                            title = paste0(voc_name, " (", HTML("&mu;"), "g/m³",")"))
                        ) %>%
-              config(scrollZoom = FALSE)
+              config(scrollZoom = FALSE, displaylogo = FALSE) 
         }
     }) 
     
@@ -443,7 +539,7 @@ server <- function(input, output, session) {
         # Clean up variable names
         voc_name <- names(voc[voc == input$pollutant])
         # Create a title for the line chart
-        line_title <- paste(voc_name, "Concentration Over Time")
+        line_title <- paste(voc_name)
         # Get unique site list
         sites <- unique(data_range()$site)
         
@@ -458,32 +554,136 @@ server <- function(input, output, session) {
                 mode = "markers + lines",
                 name = ~site,
                 connectgaps = TRUE,
-                text = paste0(data_range()$site,", ",data_range()$end_date), hoverinfo = 'text')%>% 
+                text = paste0(data_range()$site,", ",data_range()$end_date,"<br><b>",voc_name,":</b> ",data_range()[[input$pollutant]],HTML(" &mu;"), "g/m³"), 
+                hoverinfo = 'text')%>% 
             layout(
-            title = "Concentrations over time by site",
-            xaxis = list(title = "Date"),
-            yaxis = list(title = paste0(voc_name, " (", HTML("&mu;"), "g/m³", ")")),
+            title = line_title,
+            xaxis = list(tickfont = list(size = 15),
+                         titlefont = list(size = 18),
+                         title = "Date"),
+            yaxis = list(tickfont = list(size = 15),
+                         titlefont = list(size = 18),
+                         title = paste0(voc_name, " (", HTML("&mu;"), "g/m³", ")")),
             showlegend = TRUE
         ) %>%
-          config(scrollZoom = FALSE)
+          config(scrollZoom = FALSE, displaylogo = FALSE)
 
     })
     
+
+    
+    ## Render Comparison Line Charts ----
+    
+    output$compchart <- renderPlotly({
+      sites <- unique(data_range_comp()$site)
+      colors <- c("#1f77b4","#ff7f0f","#2ba02b","#d62727","#9467bd","#8c564c","#e377c3","#7f7f7f","#bcbd21")
+      selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
+            
+fig1 <- data_range_comp() %>% 
+        ungroup() %>%
+        plot_ly(legendgroup = ~site, showlegend=F) %>%
+        add_trace(
+          color = ~site,
+          colors = colors,
+          x = ~end_date,
+          y = ~get(input$comp1),
+          type = "scatter",
+          mode = "markers + lines",
+          name = ~site,
+          connectgaps = TRUE,
+          text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+                        names(voc[voc == input$comp1]),"</b>: ", data_range_comp()[[input$comp1]], HTML(" &mu;"), "g/m³"),
+          hoverinfo = 'text') 
+  
+
+fig2 <- data_range_comp() %>% 
+  ungroup() %>%
+  plot_ly(legendgroup = ~site, showlegend=F) %>%
+  add_trace(
+    color = ~site,
+    colors = colors,
+    x = ~end_date,
+    y = ~get(input$comp2),
+    type = "scatter",
+    mode = "markers + lines",
+    name = ~site,
+    connectgaps = TRUE,
+    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+                  names(voc[voc == input$comp2]),"</b>: ", data_range_comp()[[input$comp2]], HTML(" &mu;"), "g/m³"), 
+    hoverinfo = 'text')
+
+fig3 <- data_range_comp() %>% 
+  ungroup() %>%
+  plot_ly(legendgroup = ~site, showlegend=F) %>%
+  add_trace(
+    color = ~site,
+    colors = colors,
+    x = ~end_date,
+    y = ~get(input$comp3),
+    type = "scatter",
+    mode = "markers + lines",
+    name = ~site,
+    connectgaps = TRUE,
+    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+                  names(voc[voc == input$comp3]),"</b>: ", data_range_comp()[[input$comp3]], HTML(" &mu;"), "g/m³"),
+    hoverinfo = 'text')
+
+fig4 <- data_range_comp() %>% 
+  ungroup() %>%
+  plot_ly(legendgroup = ~site, showlegend=T) %>%
+  add_trace(
+    color = ~site,
+    colors = colors,
+    x = ~end_date,
+    y = ~get(input$comp4),
+    type = "scatter",
+    mode = "markers + lines",
+    name = ~site,
+    connectgaps = TRUE,
+    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+                  names(voc[voc == input$comp4]),"</b>: ", data_range_comp()[[input$comp4]], HTML(" &mu;"), "g/m³"), 
+    hoverinfo = 'text') 
+
+fig <- subplot(fig1, fig2, fig3, fig4, nrows = 4, shareX = TRUE, shareY = FALSE, titleY=TRUE) %>% 
+        layout(
+          xaxis = list(title = "Date"),
+         # annotations = annotations,
+          height = 800,
+          yaxis = list(title = paste0(names(voc[voc == input$comp1]), " (", HTML("&mu;"), "g/m³", ")")),
+          yaxis2 = list(title = paste0(names(voc[voc == input$comp2]), " (", HTML("&mu;"), "g/m³", ")")),
+          yaxis3 = list(title = paste0(names(voc[voc == input$comp3]), " (", HTML("&mu;"), "g/m³", ")")),
+          yaxis4 = list(title = paste0(names(voc[voc == input$comp4]), " (", HTML("&mu;"), "g/m³", ")"))
+        ) %>%
+        config(scrollZoom = FALSE, displaylogo = FALSE)
+    })
+    
+
+# Render the Data Table ####  
+    tab_data1 <- reactive({
+      data <- read_csv("dat.csv") %>%
+        filter(site_type == "stationary") %>%
+        mutate(
+          start_date = as.Date(start_date, format = "%m/%d/%y"),
+          end_date = as.Date(end_date, format = "%m/%d/%y")
+        ) %>%
+        ungroup() %>%
+        select(-...1) %>%
+        mutate(btex = rowSums(select(data, benzene:xylenes), na.rm = TRUE)) %>%
+        mutate(btex = round(btex, 3)) %>%
+        relocate(btex, .after = "xylenes")
+      
+      if (input$flag=="Yes") {
+        dat <- data
+      } else if (input$flag=="No") {
+        dat <- data %>% select(-ends_with("flag"))
+      }
+      return(dat)
+    })
     
     table_data <- reactive({
-        
-        mws <- c(
-            "benzene" = 78.11,
-            "toluene" = 92.14,
-            "etbenz" = 106.167,
-            "xylenes" = 106.16,
-            "btex" = 594.91
-        )
-        
-
         selected_range <- as.Date(input$date_range2, format = "%Y-%m-%d")
-        filtered <- filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
-            select(all_of(c(input$col_vars, input$col_voc))) %>%
+        filtered <- filter(tab_data1(), end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
+            select(all_of(c(input$col_vars, input$col_voc)), ends_with("flag")) %>%
             mutate(across(input$col_voc, round, 3))
 
         if (input$units == "µg/m³"){
@@ -495,16 +695,16 @@ server <- function(input, output, session) {
                     filtered <- filtered %>%
                         mutate(!!pollutant := ifelse(!is.na(!!sym(pollutant)), 
                                                      round(!!sym(pollutant) / mws[pollutant] * 24.45, 3), 
-                                                     !!sym(pollutant)))
+                                                     !!sym(pollutant))) %>%
+                      mutate(btex = rowSums(select(filtered, benzene:xylenes), na.rm = TRUE)) %>%
+                      mutate(btex = round(btex, 3)) %>%
+                      relocate(btex, .after = "xylenes")
                 }
             }
         }
-
-
-
-        
         return(filtered)
     })
+    
     
     output$table <- renderDataTable({
         datatable(table_data(),
@@ -516,12 +716,28 @@ server <- function(input, output, session) {
                                 # autoWidth = TRUE,
                                  ordering = TRUE, 
                                 dom = 'Bfrtip',
-                                 buttons = list(list(
+                                 buttons = list(
+                                   list(
                                      extend = 'collection',
                                      buttons = c('csv', 'excel', 'pdf'),
-                                     text = 'Download'
-                                 ))))
-    })
+                                     text = 'Download',
+                                     exportOptions = list(
+                                       modifier = list(page = "all")
+                                     )
+                                 )
+                                 )
+                                ))
+                                
+    }, server = FALSE)
+    
+    
+    output$codebook <- downloadHandler(
+      filename = function(){
+        "THRIVEair_codebook.xlsx"},
+      content = function(file) {
+        file.copy("www/THRIVEair_codebook.xlsx", file)
+      }
+    )
     
 }
 
