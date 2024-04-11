@@ -10,9 +10,6 @@ library(shinyWidgets)
 library(fresh)
 library(readxl)
 
-#To do: 
-#make downloadable codebook
-
 library(mapboxapi)
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
 mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
@@ -543,7 +540,7 @@ server <- function(input, output, session) {
         # Get unique site list
         sites <- unique(data_range()$site)
         
-        data_range() %>% 
+    plot <- data_range() %>% 
             ungroup() %>%
             plot_ly() %>%
             add_trace(
@@ -555,7 +552,7 @@ server <- function(input, output, session) {
                 name = ~site,
                 connectgaps = TRUE,
                 text = paste0(data_range()$site,", ",data_range()$end_date,"<br><b>",voc_name,":</b> ",data_range()[[input$pollutant]],HTML(" &mu;"), "g/m³"), 
-                hoverinfo = 'text')%>% 
+                hoverinfo = 'text') %>% 
             layout(
             title = line_title,
             xaxis = list(tickfont = list(size = 15),
@@ -567,6 +564,30 @@ server <- function(input, output, session) {
             showlegend = TRUE
         ) %>%
           config(scrollZoom = FALSE, displaylogo = FALSE)
+        
+        # Add horizontal dashed blue line if pollutant is Benzene
+        if (input$pollutant == "benzene") {
+          plot <- plot %>%
+            add_segments(
+              x = ~min(data_range()$end_date),
+              xend = ~max(data_range()$end_date),
+              y = 5,
+              yend = 5,
+              line = list(color = "blue", width = 1, dash = "dot"),
+              hoverinfo = "none",
+              name = "European Regulatory Limit \n (Annual Average)"
+            ) 
+          # %>%
+          #   add_annotations(
+          #     x = ~max(data_range()$end_date),
+          #     y = 5,
+          #     text = "WHO Regulatory Level",
+          #     showarrow = FALSE,
+          #     xshift = 0,
+          #     yshift = 10
+          #   )
+        }
+    return(plot)
 
     })
     
@@ -591,7 +612,8 @@ fig1 <- data_range_comp() %>%
           mode = "markers + lines",
           name = ~site,
           connectgaps = TRUE,
-          text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+          text = paste0(data_range_comp()$site,"<br>",
+                        data_range_comp()$end_date,"<br>",
                         names(voc[voc == input$comp1]),"</b>: ", data_range_comp()[[input$comp1]], HTML(" &mu;"), "g/m³"),
           hoverinfo = 'text') 
   
@@ -608,7 +630,8 @@ fig2 <- data_range_comp() %>%
     mode = "markers + lines",
     name = ~site,
     connectgaps = TRUE,
-    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+    text = paste0(data_range_comp()$site,"<br>",
+                  data_range_comp()$end_date,"<br>",
                   names(voc[voc == input$comp2]),"</b>: ", data_range_comp()[[input$comp2]], HTML(" &mu;"), "g/m³"), 
     hoverinfo = 'text')
 
@@ -624,7 +647,8 @@ fig3 <- data_range_comp() %>%
     mode = "markers + lines",
     name = ~site,
     connectgaps = TRUE,
-    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+    text = paste0(data_range_comp()$site,"<br>",
+                  data_range_comp()$end_date,"<br>",
                   names(voc[voc == input$comp3]),"</b>: ", data_range_comp()[[input$comp3]], HTML(" &mu;"), "g/m³"),
     hoverinfo = 'text')
 
@@ -640,7 +664,8 @@ fig4 <- data_range_comp() %>%
     mode = "markers + lines",
     name = ~site,
     connectgaps = TRUE,
-    text = paste0(data_range_comp()$site,"<br>", selected_range[1]," to ", selected_range[2],"<br><b>",
+    text = paste0(data_range_comp()$site,"<br>",
+                  data_range_comp()$end_date,"<br>",
                   names(voc[voc == input$comp4]),"</b>: ", data_range_comp()[[input$comp4]], HTML(" &mu;"), "g/m³"), 
     hoverinfo = 'text') 
 
