@@ -36,7 +36,7 @@ my_theme = create_theme(
 # Group by site and calculate site averages (within-site, across month) 
 #and date average (within-date, across sites) for each pollutant
 
-data <- read_csv("dat.csv") %>%
+data <- read_csv("data/clean/dat.csv") %>%
   filter(site_type == "stationary") %>%
     mutate(
         start_date = as.Date(start_date, format = "%m/%d/%y"),
@@ -48,13 +48,13 @@ data <- read_csv("dat.csv") %>%
   arrange(., end_date) 
 
 #Hilco benzene data, already in micrograms per meter cubed
-hilco <- read_csv("hilco.csv") %>%
+hilco <- read_csv("data/clean/hilco.csv") %>%
   select(-...1) %>%
   arrange(., end_date) %>%
   mutate(benzene = as.numeric(benzene))
 
 
-codebook <- read_excel("codebook.xlsx")
+codebook <- read_excel("data/codebook.xlsx")
 voc <- setNames(codebook$variable_name, codebook$voc_name)
 mws <- setNames(codebook$mw, codebook$variable_name)
 

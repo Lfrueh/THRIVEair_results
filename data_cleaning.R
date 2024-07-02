@@ -3,12 +3,12 @@ library(stringr)
 library(dplyr)
 library(tidyverse)
 
-sitenames <- read_excel("sitenames.xlsx") %>% 
+sitenames <- read_excel("data/sitenames.xlsx") %>% 
   rename("site" = "name_new") %>%
   select(-name_long, -name_old)
 
 #First, fix names
-rawdata <- read_excel("rawdata.xlsx") %>%
+rawdata <- read_excel("data/raw/rawdata.xlsx") %>%
   select(-coordinates) %>%
   filter(str_detect(tolower(sample), "sample")) %>%
   select(site_id:Time_difference) %>%
@@ -37,17 +37,17 @@ rawdata <- read_excel("rawdata.xlsx") %>%
   
   
   
-write.csv(rawdata, "dat.csv")
+write.csv(rawdata, "data/clean/dat.csv")
 
 
 #Hilco data, in micrograms per meter cubed
-hilco <- read_excel("hilco.xlsx") %>%
+hilco <- read_excel("data/raw/hilco.xlsx") %>%
   mutate(site = "1st St",
          site_id = 99) %>%
   separate(coordinates, into = c("lat", "long"), sep = ",", remove = TRUE) %>%
   select(-lab_id) %>%
   filter(sample == "sample")
 
-write.csv(hilco, "hilco.csv")
+write.csv(hilco, "data/clean/hilco.csv")
 
 
