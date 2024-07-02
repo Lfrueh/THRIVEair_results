@@ -1,5 +1,4 @@
-
-/*Get custom font*/
+/* Get custom font */
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans&display=swap');
 
 .irs--shiny .irs-bar, .irs--shiny .irs-single {
@@ -7,17 +6,18 @@
   background: #3ace88;
 }
 
-.main-header .navbar{
+.main-header .navbar {
   height: 50px;
 }
+
 /* Style the title bar */
 .main-header .logo {
-  color:#2E3440 !important;
- font-family: 'Open Sans', sans-serif;
- font-weight: bold;
+  color: #2E3440 !important;
+  font-family: 'Open Sans', sans-serif;
+  font-weight: bold;
 }
 
-.main-header .logo img{
+.main-header .logo img {
   display: block;
   float: right;
   padding: 0 !important;
@@ -33,7 +33,15 @@ body, h2, p, div {
   font-weight: bold;
 }
 
-p, div{
+
+.sidebar-menu .treeview-menu > li > a {
+  font-size: 16px; /* Adjust the font size for sub-items */
+  font-weight: normal; /* Adjust font weight if necessary */
+  color: #2E3440 !important; /* Dark text color for sub-items */
+}
+
+
+p, div {
   color: #2E3440;
 }
 
@@ -61,6 +69,7 @@ p, div{
 .sidebar-toggle[data-tooltip]:hover::before {
   opacity: 1;
 }
+
 /* Customize the toggle sidebar button with a black left caret icon */
 .sidebar-toggle:before {
   content: '\f104'; /* Unicode character for a black left caret icon */

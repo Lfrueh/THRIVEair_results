@@ -46,9 +46,12 @@ data <- read_csv("dat.csv") %>%
   select(-...1) %>%
   select(-ends_with("flag"), -site_type) %>%
   arrange(., end_date) 
-  
 
-
+#Hilco benzene data, already in micrograms per meter cubed
+hilco <- read_csv("hilco.csv") %>%
+  select(-...1) %>%
+  arrange(., end_date) %>%
+  mutate(benzene = as.numeric(benzene))
 
 
 codebook <- read_excel("codebook.xlsx")
@@ -97,8 +100,11 @@ ui <- dashboardPage(
       tags$li(a(href = "https://thriveairphilly.com/", img(src = "logo.png", height = "30px")), class = "dropdown")
                     ),
     dashboardSidebar(
-        sidebarMenu(menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
-                    menuItem("Compare", tabName = "compare", icon=icon("code-compare")),
+        sidebarMenu(menuItem("Dashboard", icon = icon("dashboard"),
+                             menuSubItem(HTML("THRIVEair Data:<br>All Pollutants"), tabName = "dashboard", icon = icon("dashboard"), selected = TRUE), 
+                             menuSubItem(HTML("THRIVEair +<br>Bellwether District:<br>Benzene Data"), tabName = "hilco", icon = icon("location-dot"))
+                             ),
+                    menuItem("Compare Pollutants", tabName = "compare", icon=icon("code-compare")),
                     menuItem("Data Table", tabName = "data_table", icon = icon("table")),
                     menuItem("Information", tabName = "docs", icon = icon("circle-info"))
         ),
@@ -128,7 +134,7 @@ ui <- dashboardPage(
                     
                     fluidRow(
                         box(
-                            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "btex"),
+                            selectInput("pollutant", "Select Pollutant:", choices = voc, selected = "benzene"),
                             
                             sliderTextInput(
                                 inputId = "date_range", label = "Select Monitoring End Dates:", 
@@ -224,7 +230,23 @@ ui <- dashboardPage(
                     fluidRow(
                       box(plotlyOutput("compchart"), width = 100, height = 820),
                     
-                    ))
+                    )),
+            tabItem(tabName = "hilco",
+                    fluidRow(
+                      box(title = "What is this?",
+                          solidHeader = TRUE,
+                          collapsible = TRUE,
+                          width = 12,
+                          uiOutput("hilco_text"),
+                          downloadButton("hilcodownload","Download Bellwether District Data"),
+                          HTML("<em><br>To download THRIVEair data, visit the Data Table page.</em>")
+                          )
+                    ),
+                    box(title = "Map", plotlyOutput("hilcomap"), width = 100, collapsible = TRUE),
+                    box(title = "Bar Chart", plotlyOutput("hilcobarchart"), width = 100, collapsible = TRUE),   
+                    box(title = "Changes Over Time", plotlyOutput("hilcotimeseries"), width = 100, collabsible = TRUE)
+                    )
+                    
          )
     )
 )
@@ -252,6 +274,13 @@ server <- function(input, output, session) {
            </span>")
     })
     
+    output$hilco_text <- renderUI({
+      HTML("<span style='color:black;'> 
+            In February 2024, <a href = 'https://www.thebellwetherdistrict.com/'>The Bellwether District</a> added a benzene monitor on the former refinery site at 1st Street.
+            Samples were collected using the same protocol as the rest of the THRIVEair study, but were analyzed at a different laboratory.
+            Results are shown here for comparison.
+           </span><br><br>")
+    })
     
     output$documentation <- renderUI({
       HTML(paste("<span> \
@@ -380,8 +409,29 @@ server <- function(input, output, session) {
                 write.csv(filtered_data(), file)
             }
         )
+       
         
+## HilcoDownload button ----
+        output$hilcodownload <- downloadHandler(
+          filename = function() {
+            min_date <- min(hilco$start_date)
+            max_date <- max(hilco$end_date)
+            # Set the filename for the downloaded CSV
+            paste("BellwetherDistrict_benzene_", min_date, "_to_", max_date, ".csv", sep = "")
+          },
+          content = function(file) {
+            # Write the filtered data to a CSV file
+            write.csv(hilco, file)
+          }
+        )        
+        
+         
     })
+    
+
+
+    
+
     
 ## Render Map ----
     output$map <- renderPlotly({
@@ -402,7 +452,8 @@ server <- function(input, output, session) {
         #standardize color scale max across time filters
         cmax <- max(data[[input$pollutant]])
         cmin <- 0.9*min(data[[input$pollutant]])
-        
+
+
            plot_mapbox(filtered_data()) %>%
                add_trace(
                    type = "scattermapbox",
@@ -452,6 +503,66 @@ server <- function(input, output, session) {
     })
     
 
+## Render Hilco Map ----
+    output$hilcomap <- renderPlotly({
+      mindate <- min(hilco$end_date)
+      maxdate <- max(data$end_date)
+      data2 <- data %>% 
+        filter(end_date >= mindate & end_date <= maxdate) %>%
+        select(1:5, lat, long) 
+      combined_data <- data2 %>%
+        bind_rows(., hilco) %>%
+        arrange(., end_date)
+      
+      # Create a custom title for the map
+      title_html <- paste0("Average Benzene, ", mindate," to ", maxdate)
+      
+      plot_mapbox(combined_data) %>%
+        add_trace(
+          type = "scattermapbox",
+          mode = "markers",
+          lat = ~lat,
+          lon = ~long,
+          marker = list(
+            size = 22,
+            color = "black",
+            opacity = 1.0
+          ),
+          hoverinfo = "none"
+          
+        ) %>%
+        add_trace(
+          type = "scattermapbox",
+          mode = "markers",
+          lat = ~lat,
+          lon = ~long,
+          marker = list(
+            size = 20,
+            color = combined_data$benzene,
+            opacity = 1.0,
+            colorbar = list(
+              title = paste0("Benzene<br>"," (", HTML("&mu;"), "g/m³",")")
+            ),
+            colorscale = pal,
+            reversescale = FALSE
+          ),
+          text = paste0(combined_data$site,"<br><b>Benzene:</b> ",round(combined_data$benzene,2),HTML(" &mu;"), "g/m³"),
+          hoverinfo = "text",
+          showlegend = FALSE
+          
+        ) %>%
+        layout(
+          mapbox = list(
+            layers = list(
+              below = ""
+            ),
+            style = "streets",
+            center = list(lat = mean(combined_data$lat), lon = mean(combined_data$long)),
+            zoom = 12),
+          title = title_html) %>%
+        config(scrollZoom = FALSE)
+      
+    })
     
 ## Render Bar Chart ----
     
@@ -530,6 +641,46 @@ server <- function(input, output, session) {
         }
     }) 
     
+## Render Hilco Bar Chart ----
+    output$hilcobarchart <- renderPlotly({
+      mindate <- min(hilco$end_date)
+      maxdate <- max(data$end_date)
+      data2 <- data %>% 
+        filter(end_date >= mindate & end_date <= maxdate) %>%
+        select(1:5, lat, long) 
+      combined_data <- data2 %>%
+        bind_rows(., hilco) %>%
+        arrange(., end_date) %>%
+        group_by(site) %>%
+        mutate(benzene = mean(benzene)) %>%
+        ungroup() %>%
+        select(site, benzene) %>% distinct()
+      
+      plot_ly(data = combined_data, x = ~site, y = combined_data$benzene, 
+              type = "bar", 
+              marker = list(
+                color = combined_data$benzene, 
+                colorscale = pal,
+                reversescale = FALSE), 
+              showlegend=FALSE, 
+              text = ~combined_data$site,
+              hovertemplate = paste0(combined_data$site,"<br><b>Benzene:</b> ",round(combined_data$benzene,2),HTML(" &mu;"), "g/m³","<extra></extra>")
+      ) %>%
+        layout(title = paste0("Average Benzene:<br>",min(hilco$start_date)," to ", max(data$end_date)),
+               xaxis = list(
+                 tickfont = list(size = 15),
+                 titlefont = list(size = 18),
+                 title = "Site",
+                 showticklabels = FALSE,
+                 categoryorder = "total ascending"),
+               yaxis = list(
+                 tickfont = list(size = 15),
+                 titlefont = list(size = 18),
+                 title = paste0("Benzene (", HTML("&mu;"), "g/m³",")"))
+        ) %>%
+        config(scrollZoom = FALSE, displaylogo = FALSE) 
+    })
+    
 ## Render Line Chart ----
 
     output$line_chart <- renderPlotly({
@@ -577,15 +728,6 @@ server <- function(input, output, session) {
               hoverinfo = "none",
               name = "European Regulatory Limit \n (Annual Average)"
             ) 
-          # %>%
-          #   add_annotations(
-          #     x = ~max(data_range()$end_date),
-          #     y = 5,
-          #     text = "WHO Regulatory Level",
-          #     showarrow = FALSE,
-          #     xshift = 0,
-          #     yshift = 10
-          #   )
         }
     return(plot)
 
@@ -593,29 +735,97 @@ server <- function(input, output, session) {
     
 
     
+    ##Render Hilco Line Charts ----
+    
+    output$hilcotimeseries <- renderPlotly({
+      mindate <- min(hilco$end_date)
+      maxdate <- max(data$end_date)
+      data2 <- data %>% 
+        filter(end_date >= mindate & end_date <= maxdate) %>%
+        select(1:5, lat, long)  
+      hilco2 <- hilco %>%
+        filter(end_date <= maxdate)
+
+     
+    #  sites <- unique(data2$site)
+    #  colors <- c("#1f77b4","#ff7f0f","#2ba02b","#d62727","#9467bd","#8c564c","#e377c3","#7f7f7f","#bcbd21", "#000000")
+      
+      data2 %>%
+      plot_ly() %>%
+        add_trace(
+          split = ~site,
+          x = ~end_date,
+          y = data2$benzene,
+          type = "scatter",
+          mode = "markers + lines",
+          name = ~site,
+          connectgaps = TRUE,
+          text = paste0(data2$site,"<br>",
+                        data2$end_date,"<br>",
+                        "Benzene</b>: ", data2$benzene, HTML(" &mu;"), "g/m³"),
+          hoverinfo = 'text') %>%
+         add_trace(
+           x = ~hilco2$end_date,
+           y = ~hilco2$benzene,
+           type = "scatter",
+           mode = "markers + lines",
+           name = ~hilco2$site,
+           connectgaps = TRUE,
+           marker = list(color = '#000000'),
+           line = list(color = '#000000')
+         ) %>%
+        # add_segments(
+        #   x = ~min(data2$end_date),
+        #   xend = ~max(data2$end_date),
+        #   y = 5,
+        #   yend = 5,
+        #   line = list(color = "blue", width = 1, dash = "dot"),
+        #   hoverinfo = "none",
+        #   name = "European Regulatory Limit \n (Annual Average)"
+        # ) %>% 
+        layout(
+          xaxis = list(tickfont = list(size = 15),
+                       titlefont = list(size = 18),
+                       title = "Date"),
+          yaxis = list(tickfont = list(size = 15),
+                       titlefont = list(size = 18),
+                       title = paste0("Benzene (", HTML("&mu;"), "g/m³", ")")),
+          showlegend = TRUE
+        ) %>%
+        config(scrollZoom = FALSE, displaylogo = FALSE)
+      
+      
+   
+      
+    })
+    
     ## Render Comparison Line Charts ----
     
     output$compchart <- renderPlotly({
       sites <- unique(data_range_comp()$site)
       colors <- c("#1f77b4","#ff7f0f","#2ba02b","#d62727","#9467bd","#8c564c","#e377c3","#7f7f7f","#bcbd21")
       selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
-            
+      
+      
+
+
+    
 fig1 <- data_range_comp() %>% 
-        ungroup() %>%
-        plot_ly(legendgroup = ~site, showlegend=F) %>%
-        add_trace(
-          color = ~site,
-          colors = colors,
-          x = ~end_date,
-          y = ~get(input$comp1),
-          type = "scatter",
-          mode = "markers + lines",
-          name = ~site,
-          connectgaps = TRUE,
-          text = paste0(data_range_comp()$site,"<br>",
-                        data_range_comp()$end_date,"<br>",
-                        names(voc[voc == input$comp1]),"</b>: ", data_range_comp()[[input$comp1]], HTML(" &mu;"), "g/m³"),
-          hoverinfo = 'text') 
+    ungroup() %>%
+    plot_ly(legendgroup = ~site, showlegend=F) %>%
+    add_trace(
+      color = ~site,
+      colors = colors,
+      x = ~end_date,
+      y = ~get(input$comp1),
+      type = "scatter",
+      mode = "markers + lines",
+      name = ~site,
+      connectgaps = TRUE,
+      text = paste0(data_range_comp()$site,"<br>",
+                    data_range_comp()$end_date,"<br>",
+                    names(voc[voc == input$comp1]),"</b>: ", data_range_comp()[[input$comp1]], HTML(" &mu;"), "g/m³"),
+      hoverinfo = 'text') 
   
 
 fig2 <- data_range_comp() %>% 
@@ -768,7 +978,6 @@ fig <- subplot(fig1, fig2, fig3, fig4, nrows = 4, shareX = TRUE, shareY = FALSE,
 
 
     
-
 
 
 # Run the application 

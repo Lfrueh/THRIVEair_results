@@ -40,3 +40,14 @@ rawdata <- read_excel("rawdata.xlsx") %>%
 write.csv(rawdata, "dat.csv")
 
 
+#Hilco data, in micrograms per meter cubed
+hilco <- read_excel("hilco.xlsx") %>%
+  mutate(site = "1st St",
+         site_id = 99) %>%
+  separate(coordinates, into = c("lat", "long"), sep = ",", remove = TRUE) %>%
+  select(-lab_id) %>%
+  filter(sample == "sample")
+
+write.csv(hilco, "hilco.csv")
+
+

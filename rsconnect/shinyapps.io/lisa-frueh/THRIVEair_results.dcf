@@ -5,10 +5,10 @@ account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9770867
-bundleId: 8454305
+bundleId: 8743807
 url: https://lisa-frueh.shinyapps.io/THRIVEair_results/
-when: 1712237480.35759
-lastSyncTime: 1712237480.3576
+when: 1718395291.84837
+lastSyncTime: 1718395291.84837
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: data_cleaning.R|rawdata.xlsx|runningdata.xlsx|sitenames.xlsx
+ignoredFiles: data_cleaning.R|hilco.xlsx|rawdata.xlsx|runningdata.xlsx|sitenames.xlsx
