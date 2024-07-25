@@ -15,7 +15,7 @@ library(readxl)
 library(mapboxapi)
 
 
-##Mapbox info ----
+##Mapbox token ----
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
 mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
 
