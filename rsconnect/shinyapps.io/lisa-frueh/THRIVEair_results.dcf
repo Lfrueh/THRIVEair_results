@@ -5,10 +5,7 @@ account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9770867
-bundleId: 8907488
+bundleId: 11208657
 url: https://lisa-frueh.shinyapps.io/THRIVEair_results/
-when: 1721931103.67275
-lastSyncTime: 1721931103.67276
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: data_cleaning.R

@@ -1,12 +1,12 @@
-name: app_prototype
-title:
+name: THRIVEair_shiny
+title: THRIVEair_shiny
 username: lisa-frueh
 account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
-appId: 9555195
-bundleId: 7648981
-url: https://lisa-frueh.shinyapps.io/app_prototype/
+appId: 16128891
+bundleId: 11208624
+url: https://lisa-frueh.shinyapps.io/THRIVEair_shiny/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
