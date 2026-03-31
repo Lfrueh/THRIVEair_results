@@ -17,7 +17,7 @@ library(mapboxapi)
 
 ##Mapbox token ----
 mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
-mb_access_token(mapbox_token, install = TRUE, overwrite = TRUE)
+mb_access_token(mapbox_token)
 
 ##Shiny Theme ----
 my_theme = create_theme(
@@ -43,11 +43,17 @@ my_theme = create_theme(
 data <- readRDS("data/dat_mgm3.rds") %>%
   filter(site_type == "stationary") %>%
   mutate(
-    start_date = as.Date(start_date, format = "%m/%d/%y"),
-    end_date = as.Date(end_date, format = "%m/%d/%y")
+    start_yr_temp = str_sub(start_date, 1, 4),
+    start_mo_temp = str_sub(start_date, 6,7),
+    start_day_temp = str_sub(start_date, -2,-1),
+    end_yr_temp = str_sub(end_date, 1, 4),
+    end_mo_temp = str_sub(end_date, 6,7),
+    end_day_temp = str_sub(end_date, -2,-1),
+    start_date = lubridate::make_date(year = start_yr_temp, month = start_mo_temp, day = start_day_temp),
+    end_date = lubridate::make_date(year = end_yr_temp, month = end_mo_temp, day = end_day_temp)
   ) %>%
   ungroup() %>%
-  select(-ends_with("_flag")) %>%
+  select(-ends_with("_flag"), - ends_with ("_temp")) %>%
   arrange(., end_date)
 
 #Hilco benzene data, already in micrograms per meter cubed
@@ -1019,9 +1025,16 @@ server <- function(input, output, session) {
     
     clean_dat <- data %>%
       mutate(
-        start_date = as.Date(start_date, format = "%m/%d/%y"),
-        end_date = as.Date(end_date, format = "%m/%d/%y")
-      ) 
+        start_yr_temp = str_sub(start_date, 1, 4),
+        start_mo_temp = str_sub(start_date, 6,7),
+        start_day_temp = str_sub(start_date, -2,-1),
+        end_yr_temp = str_sub(end_date, 1, 4),
+        end_mo_temp = str_sub(end_date, 6,7),
+        end_day_temp = str_sub(end_date, -2,-1),
+        start_date = lubridate::make_date(year = start_yr_temp, month = start_mo_temp, day = start_day_temp),
+        end_date = lubridate::make_date(year = end_yr_temp, month = end_mo_temp, day = end_day_temp)
+      ) %>%
+      select(-ends_with("_temp"))
     return(clean_dat)
   })
   
