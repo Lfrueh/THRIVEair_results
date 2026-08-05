@@ -1,11 +1,12 @@
 name: THRIVEair_results
-title: THRIVEair_shiny
-username:
+title: THRIVEair_results
+username: lisa-frueh
 account: lisa-frueh
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9770867
-bundleId: 11208657
+bundleId: 12370341
 url: https://lisa-frueh.shinyapps.io/THRIVEair_results/
+version: 1
 asMultiple: FALSE
 asStatic: FALSE

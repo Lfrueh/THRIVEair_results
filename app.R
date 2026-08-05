@@ -1,23 +1,17 @@
-
 #Setup -----
 #Load libraries
 library(shiny)
 library(shinyjs)
 library(tidyverse)
-library(plotly)
+library(ggiraph)
+library(leaflet)
 library(shinydashboard)
-library(sf)
 library(lubridate)
 library(DT)
 library(shinyWidgets)
 library(fresh)
 library(readxl)
-library(mapboxapi)
-
-
-##Mapbox token ----
-mapbox_token <- Sys.getenv("MAPBOX_TOKEN")
-mb_access_token(mapbox_token)
+library(scales)
 
 ##Shiny Theme ----
 my_theme = create_theme(
@@ -30,7 +24,9 @@ my_theme = create_theme(
   adminlte_global(info_box_bg = "#D8DEE9")
 )
 
-
+## Palette used everywhere (map fills, bar fills, legends) ----
+pal_colors <- c("lightpink", "darkblue")
+highlight_color <- "#FFD700"
 
 
 # Data Cleaning ----
@@ -59,7 +55,11 @@ data <- readRDS("data/dat_mgm3.rds") %>%
 #Hilco benzene data, already in micrograms per meter cubed
 hilco <- readRDS("data/hilco.rds") %>%
   arrange(., end_date) %>%
-  mutate(benzene = as.numeric(benzene))
+  mutate(
+    benzene = as.numeric(benzene),
+    lat = as.numeric(trimws(lat)),
+    long = as.numeric(trimws(long))
+  )
 
 #Read in site colors
 site_cols <- readRDS("data/sitenames.rds") %>%
@@ -72,6 +72,9 @@ pollutant_names <- codebook %>%
   rename(pollutant = variable_name)
 voc <- setNames(codebook$variable_name, codebook$voc_name)
 mws <- setNames(codebook$mw, codebook$variable_name)
+
+#Read in compound info blurb fields (sources, health effects, regulatory status, links)
+voc_info <- readRDS("data/voc_info.rds")
 
 #Create other codes
 other_vars <- c(
@@ -87,9 +90,121 @@ units <- c("µg/m³", "ppbv")
 end_dates <- unique(data$end_date)
 
 data_long <- data %>%
-  pivot_longer(cols = benzene:benzene_1_4_diethyl, names_to = "pollutant") %>%
+  pivot_longer(cols = m_p_xylene_2:btex, names_to = "pollutant") %>%
   left_join(., pollutant_names, by = "pollutant") %>%
   left_join(., site_cols, by = "site_id")
+
+## Site color lookup ----
+## One canonical site -> hex color mapping, built off the same site_color
+## column used for the maps, so line charts, bar charts, and maps all agree.
+## `distinct()` first in case a site's color varies across rows for any reason.
+site_palette <- data_long %>%
+  distinct(site, site_color) %>%
+  { setNames(.$site_color, .$site) }
+
+## Hilco/Bellwether District isn't in site_cols (it's a separate data source
+## plotted in black), so extend the palette with it for the Hilco charts.
+hilco_site_name <- unique(hilco$site)
+site_palette_hilco <- c(site_palette, setNames(rep("black", length(hilco_site_name)), hilco_site_name))
+
+
+# Helper functions ----
+
+## Build a leaflet site map. `df` must have site, lat, long, and a numeric
+## `fill_col` column to color by (or NULL for a fixed site_color column).
+## outputId is the id used for click events / proxy linking.
+leaflet_site_map <- function(df, fill_col = NULL, fixed_color_col = NULL,
+                             legend_title = NULL) {
+  
+  base_center <- list(lat = mean(df$lat, na.rm = TRUE), lng = mean(df$long, na.rm = TRUE))
+  
+  m <- leaflet(df) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    setView(lng = base_center$lng, lat = base_center$lat, zoom = 13)
+  
+  if (!is.null(fill_col)) {
+    pal_fun <- colorNumeric(pal_colors, domain = fill_col, na.color = "grey70")
+    m <- m %>%
+      addCircleMarkers(
+        lng = ~long, lat = ~lat,
+        layerId = ~site,
+        radius = 10,
+        color = "black",
+        weight = 2,
+        fillColor = pal_fun(fill_col),
+        fillOpacity = 1,
+        opacity = 1,
+        label = ~paste0(site, ": ", round(fill_col, 2), " µg/m³")
+      ) %>%
+      addLegend(
+        "bottomright",
+        pal = pal_fun,
+        values = fill_col,
+        title = legend_title %||% "µg/m³",
+        opacity = 1
+      )
+  } else {
+    if (!fixed_color_col %in% names(df)) {
+      stop("leaflet_site_map(): column '", fixed_color_col, "' not found in df")
+    }
+    fill_vals <- df[[fixed_color_col]]
+    fill_vals[is.na(fill_vals)] <- "grey70"
+    
+    m <- m %>%
+      addCircleMarkers(
+        lng = ~long, lat = ~lat,
+        layerId = ~site,
+        radius = 10,
+        color = "black",
+        weight = 2,
+        fillColor = fill_vals,
+        fillOpacity = 1,
+        opacity = 1,
+        label = ~site
+      )
+  }
+  
+  m
+}
+
+## Build an interactive ggiraph bar chart, ordered ascending, colored by value.
+girafe_bar <- function(df, value_col = "value", label_col = "site",
+                       y_title = "µg/m³", title_text = "") {
+  
+  df <- df %>%
+    mutate(.tooltip = paste0(.data[[label_col]], "<br><b>", round(.data[[value_col]], 2), "</b> µg/m³"))
+  
+  p <- ggplot(df, aes(
+    x = reorder(.data[[label_col]], .data[[value_col]]),
+    y = .data[[value_col]],
+    fill = .data[[value_col]],
+    tooltip = .tooltip,
+    data_id = .data[[label_col]]
+  )) +
+    geom_col_interactive(color = "grey30", linewidth = 0.2) +
+    scale_fill_gradient(low = pal_colors[1], high = pal_colors[2], guide = "none") +
+    labs(title = title_text, x = NULL, y = y_title) +
+    theme_minimal(base_size = 13) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.title = element_text(size = 15)
+    )
+  
+  girafe(
+    ggobj = p,
+    width_svg = 10, height_svg = 4.5,
+    options = list(
+      opts_selection(type = "multiple", css = girafe_css(css = paste0("stroke:", highlight_color, ";stroke-width:3px;"))),
+      opts_hover(css = "stroke:black;stroke-width:2px;"),
+      opts_hover_inv(css = "opacity:0.4;"),
+      opts_tooltip(opacity = 0.9, use_fill = TRUE),
+      opts_toolbar(saveaspng = FALSE)
+    )
+  )
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
 
 
 # User Interface ----
@@ -203,7 +318,16 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(
-            plotlyOutput("map"),
+            uiOutput("compound_info"),
+            width = 100,
+            title = "About This Compound",
+            collapsible = TRUE,
+            solidHeader = TRUE,
+          )
+        ),
+        fluidRow(
+          box(
+            leafletOutput("map", height = 500),
             width = 100,
             collapsible = TRUE,
             solidHeader = TRUE,
@@ -212,7 +336,7 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(
-            plotlyOutput("bar_chart"),
+            girafeOutput("bar_chart"),
             width = 100,
             collapsible = TRUE,
             solidHeader = TRUE,
@@ -221,7 +345,7 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(
-            plotlyOutput("line_chart"),
+            girafeOutput("line_chart"),
             width = 100,
             collapsible = TRUE,
             solidHeader = TRUE,
@@ -230,11 +354,11 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(
-            plotlyOutput("locationmap"),
+            leafletOutput("locationmap", height = 500),
             width = 100,
             collapsible = TRUE,
             solidHeader = TRUE,
-            title = ""
+            title = "Site Locations"
           )
         )
       ),
@@ -242,7 +366,6 @@ ui <- dashboardPage(
       tabItem(tabName = "data_table", fluidRow(
         column(
           6,
-         # checkboxGroupInput("col_voc", "Select Pollutant(s):", voc, selected = voc)
           selectInput(
             inputId = "col_voc",
             label = "Select Pollutant(s):",
@@ -250,12 +373,11 @@ ui <- dashboardPage(
             selected = voc,
             multiple = TRUE
           ),
-         
-         # Buttons for select/deselect all
-         actionButton("select_all", "Select All"),
-         actionButton("deselect_all", "Deselect All"),
-         
-         HTML("<br><br>")
+          
+          actionButton("select_all", "Select All"),
+          actionButton("deselect_all", "Deselect All"),
+          
+          HTML("<br><br>")
           
         ),
         column(
@@ -271,9 +393,6 @@ ui <- dashboardPage(
           radioButtons("units", "Select Units", units, selected = units[1]),
           radioButtons("flag", "Show Measurement Flags?", c("Yes", "No"), selected = "Yes"),
           downloadButton("codebook", "Download Codebook")
-          # HTML("<br><br>"),
-          # box(includeHTML("text/table_text.html"), width = 100)
-          
         )
       ), fluidRow(
         box(includeHTML("text/table_text.html"), width = 100)
@@ -281,7 +400,7 @@ ui <- dashboardPage(
       fluidRow(
         box(dataTableOutput("table"), style = "overflow-x: scroll", width = 100)
       )),
-
+      
       ## Comparison ----
       tabItem(tabName = "compare", fluidRow(
         box(
@@ -301,7 +420,7 @@ ui <- dashboardPage(
             "comp3",
             "Select Pollutant 3:",
             choices = voc,
-            selected = "etbenz"
+            selected = "ethylbenzene"
           ),
           selectInput(
             "comp4",
@@ -329,18 +448,17 @@ ui <- dashboardPage(
         )
       ), fluidRow(
         box(
-          plotlyOutput("compchart"),
-          width = 100,
-          height = 820
+          girafeOutput("compchart", height = "820px"),
+          width = 100
         ),
       ),
       fluidRow(
         box(
-          plotlyOutput("locationmap2"),
+          leafletOutput("locationmap2", height = 500),
           width = 100,
           collapsible = TRUE,
           solidHeader = TRUE,
-          title = ""
+          title = "Site Locations"
         )
       )
       ),
@@ -362,21 +480,21 @@ ui <- dashboardPage(
         ),
         box(
           title = "Map",
-          plotlyOutput("hilcomap"),
+          leafletOutput("hilcomap", height = 500),
           width = 100,
           collapsible = TRUE
         ),
         box(
           title = "Bar Chart",
-          plotlyOutput("hilcobarchart"),
+          girafeOutput("hilcobarchart"),
           width = 100,
           collapsible = TRUE
         ),
         box(
           title = "Changes Over Time",
-          plotlyOutput("hilcotimeseries"),
+          girafeOutput("hilcotimeseries"),
           width = 100,
-          collabsible = TRUE
+          collapsible = TRUE
         )
       )
       
@@ -394,16 +512,56 @@ server <- function(input, output, session) {
   ## Globals ----
   pal <- list(c(0, "lightpink"), c(1, "darkblue"))
   
+  ## Cross-widget linking helper -----
+  ## Keeps a set of ggiraph widgets and leaflet maps in sync on a shared
+  ## `site` data_id / layerId. Selecting/hovering-and-clicking in any member
+  ## broadcasts the selected site(s) to every other member of the group.
+  sync_group <- function(girafe_ids = character(0),
+                         leaflet_ids = character(0),
+                         leaflet_data = NULL) {
+    
+    broadcast <- function(sel, exclude_girafe = NULL, exclude_leaflet = NULL) {
+      for (id in setdiff(girafe_ids, exclude_girafe)) {
+        session$sendCustomMessage(type = paste0(id, "_set"), message = sel)
+      }
+      for (id in setdiff(leaflet_ids, exclude_leaflet)) {
+        proxy <- leafletProxy(id, session = session)
+        proxy %>% clearGroup("highlight")
+        if (length(sel) > 0 && !is.null(leaflet_data)) {
+          hl <- leaflet_data() %>% filter(site %in% sel)
+          if (nrow(hl) > 0) {
+            proxy %>% addCircleMarkers(
+              lng = hl$long, lat = hl$lat, radius = 16,
+              color = highlight_color, weight = 3, fill = FALSE,
+              group = "highlight"
+            )
+          }
+        }
+      }
+    }
+    
+    lapply(girafe_ids, function(source_id) {
+      observeEvent(input[[paste0(source_id, "_selected")]], {
+        broadcast(input[[paste0(source_id, "_selected")]], exclude_girafe = source_id)
+      }, ignoreNULL = FALSE)
+    })
+    
+    lapply(leaflet_ids, function(source_id) {
+      observeEvent(input[[paste0(source_id, "_marker_click")]], {
+        clicked <- input[[paste0(source_id, "_marker_click")]]$id
+        broadcast(clicked, exclude_leaflet = source_id)
+      })
+    })
+  }
+  
   ## Dashboard -----
   
   ### Reactive Values ----
   
-  # Select all
   observeEvent(input$select_all, {
     updateSelectInput(session, "col_voc", selected = voc)
   })
   
-  # Deselect all
   observeEvent(input$deselect_all, {
     updateSelectInput(session, "col_voc", selected = character(0))
   })
@@ -430,12 +588,12 @@ server <- function(input, output, session) {
     
   })
   
-  ### Update date selections ----    
+  ### Update date selections ----
   observe({
     selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
     
     data_range <- data_long %>%
-      filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day")) 
+      filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
     
     date_choices <- c("Average Across Date Range", format(unique(data_range$end_date), "%m/%d/%y"))
     updateSelectInput(session, "date_filter", choices = date_choices)
@@ -447,34 +605,48 @@ server <- function(input, output, session) {
   })
   
   
+  ### About This Compound text box ----
+  output$compound_info <- renderUI({
+    info <- voc_info %>% filter(variable_name == input$pollutant)
+    
+    if (nrow(info) == 0) {
+      return(HTML("<p><em>No information available for this compound yet.</em></p>"))
+    }
+    
+    name <- voc_name()
+    
+    HTML(paste0(
+      "<p><strong>", name, "</strong> is ", info$what_it_is, "</p>",
+      "<p>Its common sources are: ", info$common_sources, ".</p>",
+      "<p>When people inhale ", name, ", it can cause these health outcomes: ",
+      info$health_effects, ".</p>",
+      "<p>", name, " is <strong>", info$regulated_answer, "</strong> regulated in outdoor air. ",
+      info$regulated_detail, "</p>",
+      "<p>The scientific evidence about how outdoor ", name,
+      " in the air affects health is <strong>", tolower(info$evidence_level), "</strong>. ",
+      info$evidence_detail, "</p>",
+      "<p><a href='", info$more_info_link, "' target='_blank' rel='noopener noreferrer'>",
+      "Learn more about ", name, "</a></p>"
+    ))
+  })
+  
+  
   selected_range <- reactive({
     as.Date(input$date_range, format = "%Y-%m-%d")
   })
-  
-  #Standardize color scale max across time filters
-  # Moved toward relative color scales depending on time scale selected -- can switch back if needed.
-  # cmax <- reactive({
-  #   max(data[[input$pollutant]])
-  # })
-  # cmin <- reactive({
-  #   0.9*min(data[[input$pollutant]])
-  # })
   
   
   #Reactive summary text
   observe({
     
-    # Calculate the average concentration for the selected range
     avg_selected_range <- round(mean(dat()$value), 2)
     
-    # Calculate the study-wide average concentration for the selected pollutant
-    avg_study_wide <- data_long %>% 
+    avg_study_wide <- data_long %>%
       filter(pollutant == input$pollutant) %>%
       pull(value) %>%
       mean(., na.rm = TRUE) %>%
       round(., 2)
     
-    # Create a conditional expression comparing the selected pollutant to the study-wide average
     comparison <- if (is.na(avg_selected_range) || is.na(avg_study_wide)) {
       "N/A"
     } else if (avg_selected_range > avg_study_wide) {
@@ -484,17 +656,16 @@ server <- function(input, output, session) {
     } else {
       "<span style='color:black;'>the same as </span>"
     }
-    # Create the reactive text
     output$info<- renderUI({
       if (input$date_filter == "Average Across Date Range") {
-        HTML(paste("The average concentration of", voc_name(), 
+        HTML(paste("The average concentration of", voc_name(),
                    "for the selected date range was <strong>", round(avg_selected_range, 2), ("&mu;"), "g/m³",
-                   "</strong>.", "This is", comparison, "the study-wide average of", 
+                   "</strong>.", "This is", comparison, "the study-wide average of",
                    "<strong>", round(avg_study_wide, 2), ("&mu;"), "g/m³","</strong>."))
       } else {
-        HTML(paste("The average concentration of", voc_name(), 
+        HTML(paste("The average concentration of", voc_name(),
                    "for the week ending on", input$date_filter, "was <strong>", round(avg_selected_range, 2), ("&mu;"), "g/m³",
-                   "</strong>.", "This is", comparison, "the study-wide average of", 
+                   "</strong>.", "This is", comparison, "the study-wide average of",
                    "<strong>", round(avg_study_wide, 2), ("&mu;"), "g/m³","</strong>."))
       }
     })
@@ -502,174 +673,60 @@ server <- function(input, output, session) {
   
   
   ### Map ----
-  output$map <- renderPlotly({
-    
-    #  selected_range() <- as.Date(input$date_range, format = "%Y-%m-%d")
-    
-    # Create a custom title for the map
-    
-    title_text <- if(input$date_filter == "Average Across Date Range"){
-      paste0("Average ",voc_name(), ": ", "<br>",selected_range()[1]," to ", selected_range()[2])
-    } else{
-      paste(voc_name(), ": ", "<br>", first(dat()$start_date)," to ", first(dat()$end_date))
+  output$map <- renderLeaflet({
+    leaflet_site_map(dat(), fill_col = dat()$value, legend_title = voc_name())
+  })
+  
+  ### Bar Chart ----
+  output$bar_chart <- renderGirafe({
+    title_text <- if (input$date_filter == "Average Across Date Range") {
+      paste0("Average ", voc_name(), ": ", selected_range()[1], " to ", selected_range()[2])
+    } else {
+      paste0(voc_name(), ": ", first(dat()$start_date), " to ", first(dat()$end_date))
     }
     
-    
-    #
-    
-    # Render the map  
-    plot_mapbox(dat()) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 22,
-          color = "black",
-          opacity = 1.0
-        ),
-        hoverinfo = "none"
-      ) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 20,
-          color = dat()$value,
-          opacity = 1.0,
-        #  cmin = cmin(),
-        #  cmax = cmax(),
-          colorbar = list(title = paste0(
-            voc_name(), "<br>", " (", HTML("&mu;"), "g/m³", ")"
-          )),
-          colorscale = pal,
-          reversescale = FALSE
-        ),
-        text = paste0(
-           dat()$site,
-          "<br><b>",
-          voc_name(),
-          ":</b> ",
-            round(dat()$value, 2),
-          HTML(" &mu;"),
-          "g/m³"
-        ),
-        hoverinfo = "text",
-        showlegend = FALSE
-        
-      ) %>%
-      layout(
-        mapbox = list(
-          layers = list(below = ""),
-          style = "streets",
-          center = list(lat = mean(data$lat), lon = mean(data$long)),
-          zoom = 12
-        ),
-        title = title_text
-      ) %>%
-      config(scrollZoom = FALSE)
+    girafe_bar(dat(), value_col = "value", label_col = "site",
+               y_title = paste0(voc_name(), " (µg/m³)"),
+               title_text = title_text)
   })
   
   
-  ### Bar Chart ----
-  output$bar_chart <- renderPlotly({
-    
-    hover_text <- if(input$date_filter == "Average Across Date Range"){
-      paste0(dat()$site,"<br><b>",voc_name(),":</b> ",round(dat()$value,2),HTML(" &mu;"), "g/m³","<extra></extra>")
-    } else {
-      paste0(dat()$site,"<br><b>",voc_name(),":</b> ",round(dat()$value,2),HTML(" &mu;"), "g/m³","<extra></extra>")
-    }
-    
-    title_text <- if(input$date_filter == "Average Across Date Range"){
-      paste0("Average ",voc_name(), ": ", "<br>",selected_range()[1]," to ", selected_range()[2])
-    } else{
-      paste(voc_name(), ": ", "<br>", first(dat()$start_date)," to ", first(dat()$end_date))
-    }
-    
-    plot_ly(data = dat(), x = ~site, y = dat()$value, 
-            type = "bar", 
-            marker = list(
-              color = dat()$value, 
-              colorscale = pal,
-              reversescale = FALSE
-           #   cmin = cmin(),
-           #   cmax = cmax()), 
-            ),
-            showlegend=FALSE, 
-            text = dat()$site,
-            hovertemplate = hover_text
-    ) %>%
-      layout(title = title_text,
-             xaxis = list(
-               tickfont = list(size = 15),
-               titlefont = list(size = 18),
-               title = "Site",
-               showticklabels = FALSE,
-               categoryorder = "total ascending"),
-             yaxis = list(
-               tickfont = list(size = 15),
-               titlefont = list(size = 18),
-               title = paste0(voc_name(), " (", HTML("&mu;"), "g/m³",")"))
-      ) %>%
-      config(scrollZoom = FALSE, displaylogo = FALSE) 
-    
-  }) 
-  
-  
   ### Line Chart ----
-  
-  output$line_chart <- renderPlotly({
+  output$line_chart <- renderGirafe({
     
     data_range <- data_long %>%
       filter(pollutant == input$pollutant) %>%
       filter(end_date %in% seq(selected_range()[1], selected_range()[2], by = "day")) %>%
-      ungroup()
+      ungroup() %>%
+      mutate(.tooltip = paste0(site, ", ", end_date, "<br><b>", voc_name(), ":</b> ", round(value, 2), " µg/m³"))
     
+    p <- ggplot(data_range, aes(
+      x = end_date, y = value, color = site, group = site,
+      data_id = site, tooltip = .tooltip
+    )) +
+      geom_line_interactive(linewidth = 0.7) +
+      geom_point_interactive(size = 2) +
+      scale_color_manual(values = site_palette) +
+      labs(title = voc_name(), x = "Date", y = paste0(voc_name(), " (µg/m³)"), color = "Site") +
+      theme_minimal(base_size = 13)
     
-    # Get unique site list
-    sites <- unique(data_range$site)
-    
-    plot <- plot_ly(data_range) %>%
-      add_trace(
-        split = ~site,
-        x = ~end_date,
-        y = ~value,
-        type = "scatter",
-        mode = "markers + lines",
-        name = ~site,
-        connectgaps = TRUE,
-        text = paste0(data_range$site,", ",data_range$end_date,"<br><b>",voc_name(),":</b> ",data_range$value,HTML(" &mu;"), "g/m³"), 
-        hoverinfo = 'text') %>% 
-      layout(
-        title = voc_name(),
-        xaxis = list(tickfont = list(size = 15),
-                     titlefont = list(size = 18),
-                     title = "Date"),
-        yaxis = list(tickfont = list(size = 15),
-                     titlefont = list(size = 18),
-                     title = paste0(voc_name(), " (", HTML("&mu;"), "g/m³", ")")),
-        showlegend = TRUE
-      ) %>%
-      config(scrollZoom = FALSE, displaylogo = FALSE)
-    
-    # Add horizontal dashed blue line if pollutant is Benzene
     if (input$pollutant == "benzene") {
-      plot <- plot %>%
-        add_segments(
-          x = min(data_range$end_date),
-          xend = max(data_range$end_date),
-          y = 5,
-          yend = 5,
-          line = list(color = "blue", width = 1, dash = "dot"),
-          hoverinfo = "none",
-          name = "European Regulatory Limit \n (Annual Average)"
-        ) 
+      p <- p + geom_hline(yintercept = 5, linetype = "dotted", color = "blue") +
+        annotate("text", x = max(data_range$end_date), y = 5,
+                 label = "EU Regulatory Limit (Annual Avg)", hjust = 1, vjust = -0.5, size = 3, color = "blue")
     }
-    return(plot)
     
+    girafe(
+      ggobj = p,
+      width_svg = 10, height_svg = 5,
+      options = list(
+        opts_selection(type = "multiple", css = girafe_css(css = paste0("stroke:", highlight_color, ";stroke-width:4px;"))),
+        opts_hover(css = "stroke-width:3px;"),
+        opts_hover_inv(css = "opacity:0.25;"),
+        opts_tooltip(opacity = 0.9),
+        opts_toolbar(saveaspng = FALSE)
+      )
+    )
   })
   
   
@@ -679,268 +736,117 @@ server <- function(input, output, session) {
       selected_range <- as.Date(input$date_range, format = "%Y-%m-%d")
       min_date <- selected_range[1]
       max_date <- selected_range[2]
-      # Set the filename for the downloaded CSV
       paste("THRIVEair_results_", min_date, "_to_", max_date, ".csv", sep = "")
     },
     content = function(file) {
       filtered_data <- dat() %>%
         select(-voc_name) %>%
         pivot_wider(names_from = pollutant, values_from = value)
-      # Write the filtered data to a CSV file
       write.csv(filtered_data, file)
     }
   )
-
+  
   
   ### Site Location Map ----
-  output$locationmap <- renderPlotly({
-    
-    title_text <- paste("Site Locations, Colors Corresponding to Line Chart")
-    
-    # Render the map  
-    plot_mapbox(dat()) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 22,
-          color = "black",
-          opacity = 1.0
-        ),
-        hoverinfo = "none"
-      ) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 20,
-          color = dat()$site_color,
-          opacity = 1.0
-        ),
-        text = paste0(dat()$site
-        ),
-        hoverinfo = "text",
-        showlegend = FALSE
-        
-      ) %>%
-      layout(
-        mapbox = list(
-          layers = list(below = ""),
-          style = "streets",
-          center = list(lat = mean(data$lat), lon = mean(data$long)),
-          zoom = 12
-        ),
-        title = title_text
-      ) %>%
-      config(scrollZoom = FALSE)
+  output$locationmap <- renderLeaflet({
+    leaflet_site_map(dat(), fixed_color_col = "site_color")
   })
   
   ### Site Location Map 2----
-  output$locationmap2 <- renderPlotly({
-    
-    title_text <- paste("Site Locations, Colors Corresponding to Line Chart")
-    
-    # Render the map  
-    plot_mapbox(dat()) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 22,
-          color = "black",
-          opacity = 1.0
-        ),
-        hoverinfo = "none"
-      ) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~ lat,
-        lon = ~ long,
-        marker = list(
-          size = 20,
-          color = dat()$site_color,
-          opacity = 1.0
-        ),
-        text = paste0(dat()$site
-        ),
-        hoverinfo = "text",
-        showlegend = FALSE
-        
-      ) %>%
-      layout(
-        mapbox = list(
-          layers = list(below = ""),
-          style = "streets",
-          center = list(lat = mean(data$lat), lon = mean(data$long)),
-          zoom = 12
-        ),
-        title = title_text
-      ) %>%
-      config(scrollZoom = FALSE)
+  output$locationmap2 <- renderLeaflet({
+    leaflet_site_map(data_range_comp(), fixed_color_col = "site_color")
   })
   
   
   ## Hilco -----
   
-  ### Map ----
-  output$hilcomap <- renderPlotly({
-    
+  hilco_map_data <- reactive({
     mindate <- min(hilco$end_date)
     maxdate <- max(data$end_date)
-    data2 <- data %>% 
+    data2 <- data %>%
       filter(end_date >= mindate & end_date <= maxdate) %>%
-      select(1:5, lat, long) 
-    combined_data <- data2 %>%
+      select(site, site_id, start_date, end_date, lat, long, benzene)
+    data2 %>%
       bind_rows(., hilco) %>%
       arrange(., end_date)
-    
-    # Create a custom title for the map
-    title_html <- paste0("Average Benzene, ", mindate," to ", maxdate)
-    
-    plot_mapbox(combined_data) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~lat,
-        lon = ~long,
-        marker = list(
-          size = 22,
-          color = "black",
-          opacity = 1.0
-        ),
-        hoverinfo = "none"
-        
-      ) %>%
-      add_trace(
-        type = "scattermapbox",
-        mode = "markers",
-        lat = ~lat,
-        lon = ~long,
-        marker = list(
-          size = 20,
-          color = combined_data$benzene,
-          opacity = 1.0,
-          colorbar = list(
-            title = paste0("Benzene<br>"," (", HTML("&mu;"), "g/m³",")")
-          ),
-          colorscale = pal,
-          reversescale = FALSE
-        ),
-        text = paste0(combined_data$site,"<br><b>Benzene:</b> ",round(combined_data$benzene,2),HTML(" &mu;"), "g/m³"),
-        hoverinfo = "text",
-        showlegend = FALSE
-        
-      ) %>%
-      layout(
-        mapbox = list(
-          layers = list(
-            below = ""
-          ),
-          style = "streets",
-          center = list(lat = mean(combined_data$lat), lon = mean(combined_data$long)),
-          zoom = 12),
-        title = title_html) %>%
-      config(scrollZoom = FALSE)
-    
   })
   
+  ### Map ----
+  output$hilcomap <- renderLeaflet({
+    combined_data <- hilco_map_data() %>%
+      group_by(site) %>%
+      mutate(benzene = mean(benzene, na.rm = TRUE)) %>%
+      ungroup() %>%
+      distinct(site, .keep_all = TRUE)
+    
+    leaflet_site_map(combined_data, fill_col = combined_data$benzene, legend_title = "Benzene")
+  })
   
   
   ### Bar Chart ----
-  output$hilcobarchart <- renderPlotly({
-    mindate <- min(hilco$end_date)
-    maxdate <- max(data$end_date)
-    data2 <- data %>% 
-      filter(end_date >= mindate & end_date <= maxdate) %>%
-      select(1:5, lat, long) 
-    combined_data <- data2 %>%
-      bind_rows(., hilco) %>%
-      arrange(., end_date) %>%
+  output$hilcobarchart <- renderGirafe({
+    combined_data <- hilco_map_data() %>%
       group_by(site) %>%
-      mutate(benzene = mean(benzene)) %>%
+      mutate(benzene = mean(benzene, na.rm = TRUE)) %>%
       ungroup() %>%
-      select(site, benzene) %>% distinct()
+      select(site, benzene) %>%
+      distinct()
     
-    plot_ly(data = combined_data, x = ~site, y = combined_data$benzene, 
-            type = "bar", 
-            marker = list(
-              color = combined_data$benzene, 
-              colorscale = pal,
-              reversescale = FALSE), 
-            showlegend=FALSE, 
-            text = ~combined_data$site,
-            hovertemplate = paste0(combined_data$site,"<br><b>Benzene:</b> ",round(combined_data$benzene,2),HTML(" &mu;"), "g/m³","<extra></extra>")
-    ) %>%
-      layout(title = paste0("Average Benzene:<br>",min(hilco$start_date)," to ", max(data$end_date)),
-             xaxis = list(
-               tickfont = list(size = 15),
-               titlefont = list(size = 18),
-               title = "Site",
-               showticklabels = FALSE,
-               categoryorder = "total ascending"),
-             yaxis = list(
-               tickfont = list(size = 15),
-               titlefont = list(size = 18),
-               title = paste0("Benzene (", HTML("&mu;"), "g/m³",")"))
-      ) %>%
-      config(scrollZoom = FALSE, displaylogo = FALSE) 
+    girafe_bar(combined_data, value_col = "benzene", label_col = "site",
+               y_title = "Benzene (µg/m³)",
+               title_text = paste0("Average Benzene: ", min(hilco$start_date), " to ", max(data$end_date)))
   })
   
   
-  
-  
   ### Line Chart ----
-  
-  output$hilcotimeseries <- renderPlotly({
+  output$hilcotimeseries <- renderGirafe({
     mindate <- min(hilco$end_date)
     maxdate <- max(data$end_date)
-    data2 <- data %>% 
+    data2 <- data %>%
       filter(end_date >= mindate & end_date <= maxdate) %>%
-      select(1:5, lat, long)  
-    hilco2 <- hilco %>%
-      filter(end_date <= maxdate)
+      select(site, site_id, start_date, end_date, lat, long, benzene) %>%
+      mutate(.tooltip = paste0(site, "<br>", end_date, "<br><b>Benzene:</b> ", round(benzene, 2), " µg/m³"))
     
-    data2 %>%
-      plot_ly() %>%
-      add_trace(
-        split = ~site,
-        x = ~end_date,
-        y = data2$benzene,
-        type = "scatter",
-        mode = "markers + lines",
-        name = ~site,
-        connectgaps = TRUE,
-        text = paste0(data2$site,"<br>",
-                      data2$end_date,"<br>",
-                      "Benzene</b>: ", data2$benzene, HTML(" &mu;"), "g/m³"),
-        hoverinfo = 'text') %>%
-      add_trace(
-        x = ~hilco2$end_date,
-        y = ~hilco2$benzene,
-        type = "scatter",
-        mode = "markers + lines",
-        name = ~hilco2$site,
-        connectgaps = TRUE,
-        marker = list(color = '#000000'),
-        line = list(color = '#000000')
-      ) %>%
-      layout(
-        xaxis = list(tickfont = list(size = 15),
-                     titlefont = list(size = 18),
-                     title = "Date"),
-        yaxis = list(tickfont = list(size = 15),
-                     titlefont = list(size = 18),
-                     title = paste0("Benzene (", HTML("&mu;"), "g/m³", ")")),
-        showlegend = TRUE
-      ) %>%
-      config(scrollZoom = FALSE, displaylogo = FALSE)
+    hilco2 <- hilco %>%
+      filter(end_date <= maxdate) %>%
+      mutate(.tooltip = paste0(site, "<br>", end_date, "<br><b>Benzene:</b> ", round(benzene, 2), " µg/m³"))
+    
+    p <- ggplot() +
+      geom_line_interactive(
+        data = data2,
+        aes(x = end_date, y = benzene, color = site, group = site, data_id = site, tooltip = .tooltip),
+        linewidth = 0.7
+      ) +
+      geom_point_interactive(
+        data = data2,
+        aes(x = end_date, y = benzene, color = site, data_id = site, tooltip = .tooltip),
+        size = 2
+      ) +
+      geom_line_interactive(
+        data = hilco2,
+        aes(x = end_date, y = benzene, group = site, data_id = site, tooltip = .tooltip),
+        color = "black", linewidth = 0.9
+      ) +
+      geom_point_interactive(
+        data = hilco2,
+        aes(x = end_date, y = benzene, data_id = site, tooltip = .tooltip),
+        color = "black", size = 2
+      ) +
+      scale_color_manual(values = site_palette_hilco) +
+      labs(x = "Date", y = "Benzene (µg/m³)", color = "Site") +
+      theme_minimal(base_size = 13)
+    
+    girafe(
+      ggobj = p,
+      width_svg = 10, height_svg = 5,
+      options = list(
+        opts_selection(type = "multiple", css = girafe_css(css = paste0("stroke:", highlight_color, ";stroke-width:4px;"))),
+        opts_hover(css = "stroke-width:3px;"),
+        opts_hover_inv(css = "opacity:0.25;"),
+        opts_tooltip(opacity = 0.9),
+        opts_toolbar(saveaspng = FALSE)
+      )
+    )
   })
   
   ### Download button ----
@@ -948,79 +854,90 @@ server <- function(input, output, session) {
     filename = function() {
       min_date <- min(hilco$start_date)
       max_date <- max(hilco$end_date)
-      # Set the filename for the downloaded CSV
       paste("BellwetherDistrict_benzene_", min_date, "_to_", max_date, ".csv", sep = "")
     },
     content = function(file) {
-      # Write the filtered data to a CSV file
       write.csv(hilco, file)
     }
-  )   
+  )
   
   
   ## Comparison -----
   data_range_comp <- reactive({
     selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
-    filter(data, end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
+    data %>%
+      left_join(site_cols, by = "site_id") %>%
+      filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day"))
   })
   
-  ## Render Comparison Line Charts ----
-  
-  output$compchart <- renderPlotly({
-    sites <- unique(data_range_comp()$site)
-    colors <- c("#1f77b4","#ff7f0f","#2ba02b","#d62727","#9467bd","#8c564c","#e377c3","#7f7f7f","#bcbd21")
+  ## Render Comparison Line Chart ----
+  output$compchart <- renderGirafe({
+    selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
+    # Order matters (comp1..comp4), but duplicates collapse to one facet -
+    # you can't show the same pollutant twice.
+    selected_pollutants <- unique(c(input$comp1, input$comp2, input$comp3, input$comp4))
     
-    fig_func <- function(selected_pollutant, show_legend){
-      selected_range <- as.Date(input$date_range_comp, format = "%Y-%m-%d")
-      
-      dat <- data_long %>%
-        filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
-        ungroup() %>%
-        filter(pollutant == selected_pollutant) 
-      
-      fig <- dat %>%
-        plot_ly(legendgroup = ~site, showlegend=show_legend) %>%
-        add_trace(
-          color = ~site,
-          colors = colors,
-          x = ~end_date,
-          y = ~value,
-          type = "scatter",
-          mode = "markers + lines",
-          name = ~site,
-          connectgaps = TRUE,
-          text = paste0(dat$site,"<br>",
-                        dat$end_date,"<br>",
-                        dat$voc_name,"</b>: ", dat$value, HTML(" &mu;"), "g/m³"),
-          hoverinfo = 'text')
-    }
+    validate(
+      need(length(selected_pollutants) > 0, "Select at least one pollutant to compare."),
+      need(any(selected_pollutants %in% data_long$pollutant),
+           "None of the selected pollutants have data available.")
+    )
     
-    fig <- subplot(fig_func(input$comp1, T), 
-                   fig_func(input$comp2, F), 
-                   fig_func(input$comp3, F), 
-                   fig_func(input$comp4, F), 
-                   nrows = 4, shareX = TRUE, shareY = FALSE, titleY=TRUE) %>% 
-      layout(
-        xaxis = list(title = "Date"),
-        height = 800,
-        yaxis = list(title = paste0(names(voc[voc == input$comp1]), " (", HTML("&mu;"), "g/m³", ")")),
-        yaxis2 = list(title = paste0(names(voc[voc == input$comp2]), " (", HTML("&mu;"), "g/m³", ")")),
-        yaxis3 = list(title = paste0(names(voc[voc == input$comp3]), " (", HTML("&mu;"), "g/m³", ")")),
-        yaxis4 = list(title = paste0(names(voc[voc == input$comp4]), " (", HTML("&mu;"), "g/m³", ")"))
-      ) %>%
-      config(scrollZoom = FALSE, displaylogo = FALSE)
+    # code -> display name, built once from the same lookup used elsewhere
+    code_to_name <- setNames(names(voc), voc)
+    
+    dat_comp <- data_long %>%
+      filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
+      ungroup() %>%
+      filter(pollutant %in% selected_pollutants) %>%
+      mutate(
+        # facet on the code itself - guaranteed unique, no name-matching to get wrong
+        pollutant = factor(pollutant, levels = selected_pollutants),
+        .tooltip = paste0(site, "<br>", end_date, "<br><b>", voc_name, ":</b> ", round(value, 2), " µg/m³")
+      )
+    
+    validate(
+      need(nrow(dat_comp) > 0, "No data available for the selected pollutant(s) in this date range.")
+    )
+    
+    facet_labels <- code_to_name[levels(dat_comp$pollutant)]
+    
+    p <- ggplot(dat_comp, aes(
+      x = end_date, y = value, color = site, group = site,
+      data_id = site, tooltip = .tooltip
+    )) +
+      geom_line_interactive(linewidth = 0.6) +
+      geom_point_interactive(size = 1.6) +
+      facet_wrap(~pollutant, ncol = 1, scales = "free_y",
+                 labeller = as_labeller(facet_labels)) +
+      scale_color_manual(values = site_palette) +
+      labs(x = "Date", y = "Concentration (µg/m³)", color = "Site") +
+      theme_minimal(base_size = 13) +
+      theme(strip.text = element_text(face = "bold", size = 13))
+    
+    girafe(
+      ggobj = p,
+      width_svg = 10, height_svg = 11,
+      options = list(
+        opts_selection(type = "multiple", css = girafe_css(css = paste0("stroke:", highlight_color, ";stroke-width:4px;"))),
+        opts_hover(css = "stroke-width:3px;"),
+        opts_hover_inv(css = "opacity:0.25;"),
+        opts_tooltip(opacity = 0.9),
+        opts_toolbar(saveaspng = FALSE)
+      )
+    )
   })
   
   
   
   ## Data Table -----
-  ### Render the Data Table ####  
+  ### Render the Data Table ####
   tab_data1 <- reactive({
     
     if (input$units == "µg/m³"){
-      data <- readRDS("data/dat_mgm3.rds") 
+      data <- readRDS("data/dat_mgm3.rds")
     } else {
-      data <- readRDS("data/dat_ppb.rds") 
+      data <- readRDS("data/dat_ppb.rds")
     }
     
     clean_dat <- data %>%
@@ -1046,10 +963,8 @@ server <- function(input, output, session) {
     flag_cols <- paste0(voc_cols, "_flag")
     flag_cols <- flag_cols[flag_cols %in% colnames(tab_data1())]
     
-    # If user chooses "No" for flags, ignore flag_cols
     if (input$flag == "No") flag_cols <- character(0)
     
-    # Build interleaved order: var, var_flag, var2, var2_flag, ...
     interleaved_cols <- c()
     for (i in seq_along(voc_cols)) {
       interleaved_cols <- c(interleaved_cols, voc_cols[i])
@@ -1058,12 +973,11 @@ server <- function(input, output, session) {
       }
     }
     
-    # Combine with other selected columns
     select_cols <- c(input$col_vars, interleaved_cols)
     
     filtered <- tab_data1() %>%
       filter(end_date %in% seq(selected_range[1], selected_range[2], by = "day")) %>%
-      select(site:end_date, all_of(select_cols)) %>%
+      select(site, site_type, lat, long, start_date, end_date, all_of(select_cols)) %>%
       mutate(across(all_of(voc_cols), round, 3))
     
     return(filtered)
@@ -1072,13 +986,11 @@ server <- function(input, output, session) {
   
   output$table <- renderDataTable({
     datatable(table_data(),
-              extensions = 'Buttons', 
-              options = list(scrollX=TRUE, 
-                             paging = TRUE, 
+              extensions = 'Buttons',
+              options = list(scrollX=TRUE,
+                             paging = TRUE,
                              searching = TRUE,
-                             # fixedColumns = TRUE, 
-                             # autoWidth = TRUE,
-                             ordering = TRUE, 
+                             ordering = TRUE,
                              dom = 'Bfrtip',
                              buttons = list(
                                list(
@@ -1104,14 +1016,27 @@ server <- function(input, output, session) {
   )
   
   
+  ## Wire up cross-widget linking -----
+  sync_group(
+    girafe_ids  = c("bar_chart", "line_chart"),
+    leaflet_ids = c("map", "locationmap"),
+    leaflet_data = dat
+  )
+  
+  sync_group(
+    girafe_ids  = c("hilcobarchart", "hilcotimeseries"),
+    leaflet_ids = c("hilcomap"),
+    leaflet_data = hilco_map_data
+  )
+  
+  sync_group(
+    girafe_ids  = c("compchart"),
+    leaflet_ids = c("locationmap2"),
+    leaflet_data = data_range_comp
+  )
+  
 }
 
 
 # Run app ----
 shinyApp(ui = ui, server = server)
-
-
-
-
-
-
